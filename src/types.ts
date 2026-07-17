@@ -22,11 +22,35 @@ export interface MonitoringView {
   degradedReason?: string;
 }
 
+export interface WeeklyQuota {
+  usedPercent: number;
+  remainingPercent: number;
+  resetsAtMs: number;
+}
+
+export type ThemeMode = "system" | "light" | "dark";
+export type InitializationPhase = "idle" | "starting" | "discoveringCandidates" | "readingQuota" | "reconcilingSessions" | "complete" | "failed";
+export interface InitializationEvent {
+  runId: number;
+  sequence: number;
+  occurredAtMs: number;
+  phase: InitializationPhase;
+  summary: string;
+}
+export interface InitializationSnapshot {
+  runId: number;
+  phase: InitializationPhase;
+  events: InitializationEvent[];
+}
+
 export interface AppSnapshot {
   sessions: SessionSnapshot[];
+  weeklyQuota?: WeeklyQuota;
   isLoading: boolean;
+  initialization: InitializationSnapshot;
   monitoring: MonitoringView;
   alwaysOnTop: boolean;
   launchAtLogin: boolean;
   locale: "system" | "en" | "zh-CN";
+  theme: ThemeMode;
 }

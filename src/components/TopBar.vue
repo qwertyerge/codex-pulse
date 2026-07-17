@@ -1,6 +1,9 @@
 <script setup lang="ts">
-defineProps<{ activeCount: number; alwaysOnTop: boolean }>();
-defineEmits<{ "toggle-pin": [] }>();
+import { Monitor, Moon, Pin, PinOff, Sun } from "@lucide/vue";
+import type { ThemeMode } from "../types";
+
+defineProps<{ activeCount: number; alwaysOnTop: boolean; theme: ThemeMode }>();
+defineEmits<{ "toggle-pin": []; "set-theme": [theme: ThemeMode] }>();
 </script>
 
 <template>
@@ -13,8 +16,20 @@ defineEmits<{ "toggle-pin": [] }>();
       <span class="top-bar__count">{{ activeCount }} active</span>
     </span>
     <span class="top-bar__controls">
-      <button type="button" :aria-label="alwaysOnTop ? 'Unpin window' : 'Pin window to top'" @click="$emit('toggle-pin')">
-        {{ alwaysOnTop ? "Unpin" : "Pin to Top" }}
+      <span class="top-bar__theme-group" role="group" aria-label="Appearance">
+        <button type="button" title="Use light appearance" aria-label="Use light appearance" :aria-pressed="theme === 'light'" @click="$emit('set-theme', 'light')">
+          <Sun aria-hidden="true" />
+        </button>
+        <button type="button" title="Use dark appearance" aria-label="Use dark appearance" :aria-pressed="theme === 'dark'" @click="$emit('set-theme', 'dark')">
+          <Moon aria-hidden="true" />
+        </button>
+        <button type="button" title="Follow system appearance" aria-label="Follow system appearance" :aria-pressed="theme === 'system'" @click="$emit('set-theme', 'system')">
+          <Monitor aria-hidden="true" />
+        </button>
+      </span>
+      <button class="top-bar__pin" type="button" :title="alwaysOnTop ? 'Unpin window' : 'Pin window to top'" :aria-label="alwaysOnTop ? 'Unpin window' : 'Pin window to top'" @click="$emit('toggle-pin')">
+        <PinOff v-if="alwaysOnTop" aria-hidden="true" />
+        <Pin v-else aria-hidden="true" />
       </button>
     </span>
   </header>

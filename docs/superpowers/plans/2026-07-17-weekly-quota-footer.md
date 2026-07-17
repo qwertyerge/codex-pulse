@@ -4,7 +4,7 @@
 
 **Goal:** Show the locally observed Codex weekly quota in a persistent footer without adding foreground I/O or reparsing historical transcript lines.
 
-**Architecture:** `token_count` records become optional `WeeklyQuota` observations while a per-file `ScanCache` retains an accumulated parsed transcript and a line/byte cursor. The existing background refresh derives sessions and the newest quota from that cache, and Vue renders the resulting optional snapshot in a non-scrolling hourglass footer.
+**Architecture:** `token_count` records become optional `WeeklyQuota` observations while per-file `ScanCache` instances retain accumulated transcript state and line/byte cursors. Active sessions continue to use SQLite-selected candidates; a separately bounded `QuotaSourceCache` discovers recent daily session files once per minute and supplies the newest unexpired quota without foreground I/O. Vue renders the resulting optional snapshot in a non-scrolling hourglass footer.
 
 **Tech Stack:** Rust 2021, Tauri 2, `serde_json`, Vue 3, TypeScript, Vitest, Vue Test Utils.
 
@@ -14,7 +14,8 @@
 - Treat the rate-limit slot as data: select `primary` or `secondary` only when `window_minutes == 10080`.
 - Run all filesystem and JSON parsing in the existing background blocking task; `get_snapshot` must read cached memory only.
 - Cache per-file `processed_line_count` and `byte_offset`; unchanged files parse zero lines and append-only files parse only complete appended lines.
-- Rebuild a cache entry after replacement, truncation, or non-append modification; do not present unavailable or stale data as current quota.
+- Rebuild a cache entry after replacement, truncation, or non-append modification; do not present an expired quota as current.
+- Quota source discovery may enumerate only today and yesterday's session directories, at most once per minute, retain 16 most recently modified JSONL files, and incrementally scan that set between discoveries.
 - Keep the footer outside `.session-list`; it must remain visible while cards scroll.
 - Use Chinese quota copy: `周额度`, `已用`, `剩余`, `后重置`, and `暂不可用`.
 
@@ -27,8 +28,8 @@
 | `src-tauri/src/model.rs` | Serializable `WeeklyQuota` and the optional `AppSnapshot.weekly_quota` contract. |
 | `src-tauri/src/codex/jsonl.rs` | Parse `token_count` weekly rate-limit records from either rate-limit slot. |
 | `src-tauri/src/codex/discovery.rs` | Maintain incremental per-transcript line/byte cursors and accumulated parsed transcript data. |
-| `src-tauri/src/monitor.rs` | Select candidates, update the cache, and return sessions plus the newest quota observation. |
-| `src-tauri/src/commands.rs` | Own the scan cache and the cached weekly quota exposed to Tauri commands. |
+| `src-tauri/src/monitor.rs` | Select active candidates, maintain the bounded quota source cache, and return sessions plus the newest unexpired quota observation. |
+| `src-tauri/src/commands.rs` | Own both background scan caches and the cached weekly quota exposed to Tauri commands. |
 | `src/types.ts` | Mirror the serialized quota contract for Vue. |
 | `src/lib/duration.ts` | Format the reset countdown. |
 | `src/components/FooterStatus.vue` | Render quota, hourglass, progress semantics, and unavailable state. |
@@ -244,8 +245,13 @@
       .cloned();
   ```
 
-  Continue selecting at most `SQLITE_CANDIDATE_LIMIT` paths. Do not add a quota
-  directory walk or a second JSONL read.
+  Continue selecting at most `SQLITE_CANDIDATE_LIMIT` active-session paths. Add
+  a separate `QuotaSourceCache` that, no more than once per minute, lists
+  today's and yesterday's daily session directories, keeps the 16 newest JSONL
+  files, and uses a per-file tail cache between discoveries. An unseen source
+  file reads only its final 256 KiB; subsequent checks use the retained line
+  count and byte cursor. Prefer its newest unexpired weekly observation over
+  the active-session scan's result.
 
 - [ ] **Step 5: Run cache and monitor tests**
 
@@ -278,7 +284,7 @@
 
 **Interfaces:**
 - `AppSnapshot.weekly_quota: Option<WeeklyQuota>` serializes as `weeklyQuota`.
-- `AppState` owns `scan_cache: Mutex<ScanCache>` and `weekly_quota: RwLock<Option<WeeklyQuota>>`.
+- `AppState` owns `scan_cache: Mutex<ScanCache>`, `quota_source_cache: Mutex<QuotaSourceCache>`, and `weekly_quota: RwLock<Option<WeeklyQuota>>`.
 - The TypeScript `WeeklyQuota` interface has `usedPercent`, `remainingPercent`, and `resetsAtMs`.
 
 - [ ] **Step 1: Write failing snapshot and frontend fixture tests**
@@ -351,7 +357,7 @@
 
 **Interfaces:**
 - `formatQuotaReset(milliseconds: number): string` returns compact `Xd Yh`, `Xh Ym`, or `Xm` values without a suffix.
-- `FooterStatus` accepts `quota?: WeeklyQuota` and `nowMs: number`.
+- `FooterStatus` accepts `quota?: WeeklyQuota`, `nowMs: number`, and the active-session count.
 - Available markup includes `[role="progressbar"]` with `aria-valuenow=quota.usedPercent`; unavailable markup contains no progress bar.
 
 - [ ] **Step 1: Write failing formatter and component tests**
@@ -401,10 +407,15 @@
   }
   ```
 
-  In `FooterStatus.vue`, compute a reset label only when `quota` is supplied,
+  In `FooterStatus.vue`, compute a reset label only when `quota` is supplied and
+  its reset time is in the future,
   draw an `aria-hidden="true"` inline hourglass SVG, and bind the progress bar
   width to `quota.usedPercent + "%"`. Do not set a live region: a ticking
   countdown must not repeatedly announce itself to screen readers.
+
+  When the active-session count is zero while an unexpired quota is available,
+  render a subdued stale treatment without the progress bar and explain that a
+  new task will resume automatic updates.
 
 - [ ] **Step 4: Integrate the footer without expanding the scroll area**
 

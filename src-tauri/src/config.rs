@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::model::ThemeMode;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
@@ -13,6 +15,7 @@ pub struct AppConfig {
     pub launch_at_login: bool,
     pub monitoring_enabled: bool,
     pub locale: String,
+    pub theme: ThemeMode,
 }
 
 impl Default for AppConfig {
@@ -24,6 +27,7 @@ impl Default for AppConfig {
             launch_at_login: false,
             monitoring_enabled: false,
             locale: "system".into(),
+            theme: ThemeMode::System,
         }
     }
 }
@@ -73,6 +77,7 @@ fn ensure_parent(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{AppConfig, ConfigStore};
+    use crate::model::ThemeMode;
 
     #[test]
     fn persists_the_pin_state_across_loads() {
@@ -93,5 +98,20 @@ mod tests {
         let store = ConfigStore::new(temp.path().join("missing.json"));
 
         assert_eq!(store.load().unwrap(), AppConfig::default());
+    }
+
+    #[test]
+    fn persists_an_explicit_theme_choice() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(temp.path().join("config.json"));
+        let config = AppConfig {
+            theme: ThemeMode::Dark,
+            ..AppConfig::default()
+        };
+
+        store.save(&config).unwrap();
+
+        assert_eq!(store.load().unwrap().theme, ThemeMode::Dark);
+        assert_eq!(AppConfig::default().theme, ThemeMode::System);
     }
 }

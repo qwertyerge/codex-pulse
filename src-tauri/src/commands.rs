@@ -12,17 +12,31 @@ use chrono::Utc;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::codex::discovery::ScanCache;
 use crate::config::{AppConfig, ConfigStore};
-use crate::model::{AppSnapshot, MonitoringView, RecentEvent, SessionSnapshot};
-use crate::monitor::scan_active_sessions;
+use crate::initialization::{InitializationFeed, INITIALIZATION_PROGRESS_EVENT};
+use crate::model::{
+    AppSnapshot, InitializationPhase, InitializationSnapshot, MonitoringView, RecentEvent,
+    SessionSnapshot, ThemeMode, WeeklyQuota,
+};
+use crate::monitor::{scan_active_sessions_with_cache, QuotaSourceCache};
 
 pub struct AppState {
     pub codex_home: PathBuf,
     pub store: ConfigStore,
     pub config: Mutex<AppConfig>,
-    sessions: RwLock<Vec<SessionSnapshot>>,
+    cached_snapshot: RwLock<CachedSnapshot>,
+    scan_cache: Mutex<ScanCache>,
+    quota_source_cache: Mutex<QuotaSourceCache>,
+    initialization: Mutex<InitializationFeed>,
     recent_event_display: Mutex<HashMap<String, DisplayedRecentEvent>>,
     refresh_in_flight: AtomicBool,
+}
+
+#[derive(Default)]
+struct CachedSnapshot {
+    sessions: Vec<SessionSnapshot>,
+    weekly_quota: Option<WeeklyQuota>,
 }
 
 const RECENT_EVENT_COALESCE_MS: i64 = 5_000;
@@ -40,7 +54,10 @@ impl AppState {
             codex_home,
             store,
             config: Mutex::new(config),
-            sessions: RwLock::new(Vec::new()),
+            cached_snapshot: RwLock::new(CachedSnapshot::default()),
+            scan_cache: Mutex::new(ScanCache::default()),
+            quota_source_cache: Mutex::new(QuotaSourceCache::default()),
+            initialization: Mutex::new(InitializationFeed::default()),
             recent_event_display: Mutex::new(HashMap::new()),
             refresh_in_flight: AtomicBool::new(false),
         })
@@ -56,17 +73,55 @@ impl AppState {
             codex_home: PathBuf::from(".codex"),
             store,
             config: Mutex::new(AppConfig::default()),
-            sessions: RwLock::new(Vec::new()),
+            cached_snapshot: RwLock::new(CachedSnapshot::default()),
+            scan_cache: Mutex::new(ScanCache::default()),
+            quota_source_cache: Mutex::new(QuotaSourceCache::default()),
+            initialization: Mutex::new(InitializationFeed::default()),
             recent_event_display: Mutex::new(HashMap::new()),
             refresh_in_flight: AtomicBool::new(false),
         })
     }
 
-    fn cached_sessions(&self) -> Vec<SessionSnapshot> {
-        self.sessions
+    fn cached_snapshot(&self) -> (Vec<SessionSnapshot>, Option<WeeklyQuota>) {
+        self.cached_snapshot
             .read()
-            .map(|sessions| sessions.clone())
+            .map(|snapshot| (snapshot.sessions.clone(), snapshot.weekly_quota.clone()))
             .unwrap_or_default()
+    }
+
+    fn cached_initialization(&self) -> InitializationSnapshot {
+        self.initialization
+            .lock()
+            .map(|feed| feed.snapshot())
+            .unwrap_or_default()
+    }
+}
+
+fn publish_initialization_event(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    now_ms: i64,
+    phase: InitializationPhase,
+    summary: impl Into<String>,
+) {
+    let event = state
+        .initialization
+        .lock()
+        .ok()
+        .map(|mut feed| feed.record(now_ms, phase, summary.into()));
+    if let Some(event) = event {
+        let _ = app.emit(INITIALIZATION_PROGRESS_EVENT, event);
+    }
+}
+
+fn begin_initialization(app: &tauri::AppHandle, state: &AppState, now_ms: i64) {
+    let event = state
+        .initialization
+        .lock()
+        .ok()
+        .map(|mut feed| feed.begin(now_ms));
+    if let Some(event) = event {
+        let _ = app.emit(INITIALIZATION_PROGRESS_EVENT, event);
     }
 }
 
@@ -110,9 +165,17 @@ fn coalesce_recent_events(
 }
 
 pub fn snapshot_for_home(codex_home: &Path, now_ms: i64) -> Result<AppSnapshot> {
+    let mut scan_cache = ScanCache::default();
+    let scan = scan_active_sessions_with_cache(codex_home, now_ms, &mut scan_cache)?;
+    let mut quota_source_cache = QuotaSourceCache::default();
+    let weekly_quota = quota_source_cache
+        .latest_weekly_quota(codex_home, now_ms)
+        .or(scan.weekly_quota);
     Ok(AppSnapshot {
-        sessions: scan_active_sessions(codex_home, now_ms)?,
+        sessions: scan.sessions,
+        weekly_quota,
         is_loading: false,
+        initialization: InitializationSnapshot::default(),
         monitoring: MonitoringView {
             enabled: false,
             needs_repair: false,
@@ -122,6 +185,7 @@ pub fn snapshot_for_home(codex_home: &Path, now_ms: i64) -> Result<AppSnapshot> 
         always_on_top: false,
         launch_at_login: false,
         locale: "system".into(),
+        theme: ThemeMode::System,
     })
 }
 
@@ -138,10 +202,26 @@ pub fn set_always_on_top_config(state: &AppState, value: bool) -> Result<()> {
 }
 
 #[tauri::command]
+pub fn set_theme(theme: ThemeMode, state: State<'_, AppState>) -> Result<ThemeMode, String> {
+    let mut current = state
+        .config
+        .lock()
+        .map_err(|_| "Codex Pulse config lock is poisoned".to_string())?;
+    let mut next = current.clone();
+    next.theme = theme;
+    state.store.save(&next).map_err(|error| error.to_string())?;
+    *current = next;
+    Ok(theme)
+}
+
+#[tauri::command]
 pub fn get_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
+    let (sessions, weekly_quota) = state.cached_snapshot();
     let mut snapshot = AppSnapshot {
-        sessions: state.cached_sessions(),
+        sessions,
+        weekly_quota,
         is_loading: state.refresh_in_flight.load(Ordering::Acquire),
+        initialization: state.cached_initialization(),
         monitoring: MonitoringView {
             enabled: false,
             needs_repair: false,
@@ -151,6 +231,7 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
         always_on_top: false,
         launch_at_login: false,
         locale: "system".into(),
+        theme: ThemeMode::System,
     };
     let config = state
         .config
@@ -159,6 +240,7 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     snapshot.always_on_top = config.always_on_top;
     snapshot.launch_at_login = config.launch_at_login;
     snapshot.locale = config.locale.clone();
+    snapshot.theme = config.theme;
     let hooks_installed = crate::hook_config::is_installed(&state.codex_home);
     snapshot.monitoring.enabled = config.monitoring_enabled && hooks_installed;
     snapshot.monitoring.needs_repair = config.monitoring_enabled && !hooks_installed;
@@ -171,20 +253,85 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
     if state.refresh_in_flight.swap(true, Ordering::AcqRel) {
         return;
     }
+    begin_initialization(&app, &state, Utc::now().timestamp_millis());
     let codex_home = state.codex_home.clone();
+    let app_for_scan = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = tauri::async_runtime::spawn_blocking(move || {
-            scan_active_sessions(&codex_home, Utc::now().timestamp_millis())
+            let state = app_for_scan.state::<AppState>();
+            let now_ms = Utc::now().timestamp_millis();
+            publish_initialization_event(
+                &app_for_scan,
+                &state,
+                Utc::now().timestamp_millis(),
+                InitializationPhase::ReadingQuota,
+                "Reading bounded weekly quota observations",
+            );
+            let mut quota_source_cache = state
+                .quota_source_cache
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Codex Pulse quota source cache lock is poisoned"))?;
+            let weekly_quota = quota_source_cache.latest_weekly_quota(&codex_home, now_ms);
+            drop(quota_source_cache);
+            publish_initialization_event(
+                &app_for_scan,
+                &state,
+                Utc::now().timestamp_millis(),
+                InitializationPhase::DiscoveringCandidates,
+                "Discovering recent active-session candidates",
+            );
+            publish_initialization_event(
+                &app_for_scan,
+                &state,
+                Utc::now().timestamp_millis(),
+                InitializationPhase::ReconcilingSessions,
+                "Reconciling active Codex sessions",
+            );
+            let mut scan_cache = state
+                .scan_cache
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Codex Pulse scan cache lock is poisoned"))?;
+            let mut scan = scan_active_sessions_with_cache(&codex_home, now_ms, &mut scan_cache)?;
+            scan.weekly_quota = weekly_quota.or(scan.weekly_quota);
+            Ok::<_, anyhow::Error>(scan)
         })
         .await;
         let state = app.state::<AppState>();
-        if let Ok(Ok(mut sessions)) = result {
-            if let Ok(mut display) = state.recent_event_display.lock() {
-                coalesce_recent_events(&mut sessions, &mut display, Utc::now().timestamp_millis());
+        match result {
+            Ok(Ok(mut scan)) => {
+                if let Ok(mut display) = state.recent_event_display.lock() {
+                    coalesce_recent_events(
+                        &mut scan.sessions,
+                        &mut display,
+                        Utc::now().timestamp_millis(),
+                    );
+                }
+                if let Ok(mut cached) = state.cached_snapshot.write() {
+                    cached.sessions = scan.sessions;
+                    cached.weekly_quota = scan.weekly_quota;
+                }
+                publish_initialization_event(
+                    &app,
+                    &state,
+                    Utc::now().timestamp_millis(),
+                    InitializationPhase::Complete,
+                    "Active session reconciliation complete",
+                );
             }
-            if let Ok(mut cached) = state.sessions.write() {
-                *cached = sessions;
-            }
+            Ok(Err(error)) => publish_initialization_event(
+                &app,
+                &state,
+                Utc::now().timestamp_millis(),
+                InitializationPhase::Failed,
+                format!("Reconciliation failed: {error}"),
+            ),
+            Err(error) => publish_initialization_event(
+                &app,
+                &state,
+                Utc::now().timestamp_millis(),
+                InitializationPhase::Failed,
+                format!("Reconciliation failed: {error}"),
+            ),
         }
         state.refresh_in_flight.store(false, Ordering::Release);
         let _ = app.emit(crate::hook::SESSIONS_CHANGED_EVENT, ());
@@ -242,11 +389,34 @@ pub fn open_thread(thread_id: String, app: tauri::AppHandle) -> Result<(), Strin
         .map_err(|error| error.to_string())
 }
 
+fn validate_external_url(value: &str) -> Result<(), String> {
+    let parsed =
+        url::Url::parse(value).map_err(|error| format!("Invalid external URL: {error}"))?;
+    if matches!(parsed.scheme(), "http" | "https" | "mailto") {
+        Ok(())
+    } else {
+        Err(format!(
+            "Unsupported external URL scheme: {}",
+            parsed.scheme()
+        ))
+    }
+}
+
+#[tauri::command]
+pub fn open_external_url(url: String, app: tauri::AppHandle) -> Result<(), String> {
+    validate_external_url(&url)?;
+    app.opener()
+        .open_url(url, None::<String>)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use super::{coalesce_recent_events, set_always_on_top_config, AppState};
+    use super::{
+        coalesce_recent_events, set_always_on_top_config, validate_external_url, AppState,
+    };
     use crate::config::ConfigStore;
     use crate::model::{RecentEvent, RecentEventPriority, SessionSnapshot};
 
@@ -300,12 +470,59 @@ mod tests {
         let snapshot = super::snapshot_for_home(temp.path(), 1_784_272_200_000).unwrap();
 
         assert!(snapshot.sessions.is_empty());
+        assert!(snapshot.weekly_quota.is_none());
         assert!(!snapshot.monitoring.enabled);
         assert_eq!(snapshot.monitoring.stale_count, 0);
 
         set_always_on_top_config(&state, true).unwrap();
         assert!(state.config.lock().unwrap().always_on_top);
         assert!(state.store.load().unwrap().always_on_top);
-        assert!(state.cached_sessions().is_empty());
+        assert!(state.cached_snapshot().0.is_empty());
+    }
+
+    #[test]
+    fn accepts_only_safe_external_handoff_schemes() {
+        for url in [
+            "https://example.com",
+            "http://example.com",
+            "mailto:hello@example.com",
+        ] {
+            assert!(validate_external_url(url).is_ok());
+        }
+        for url in [
+            "javascript:alert(1)",
+            "file:///tmp/private",
+            "codex://thread/123",
+        ] {
+            assert!(validate_external_url(url).is_err());
+        }
+    }
+
+    #[test]
+    fn snapshot_for_home_exposes_the_latest_weekly_quota() {
+        let temp = tempfile::tempdir().unwrap();
+        let sessions = temp.path().join("sessions/2026/07/17");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(
+            sessions.join("root.jsonl"),
+            concat!(
+                "{\"timestamp\":\"2026-07-17T07:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"root\",\"timestamp\":\"2026-07-17T07:00:00Z\",\"cwd\":\"/repo\",\"source\":\"cli\"}}\n",
+                "{\"timestamp\":\"2026-07-17T07:01:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"turn-1\"}}\n",
+                "{\"timestamp\":\"2026-07-17T07:02:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":81.0,\"window_minutes\":10080,\"resets_at\":1784870653}}}}\n"
+            ),
+        )
+        .unwrap();
+
+        let snapshot = super::snapshot_for_home(temp.path(), 1_784_272_200_000).unwrap();
+
+        assert_eq!(snapshot.weekly_quota.as_ref().unwrap().used_percent, 81);
+        assert_eq!(
+            snapshot.weekly_quota.as_ref().unwrap().remaining_percent,
+            19
+        );
+        assert_eq!(
+            snapshot.weekly_quota.as_ref().unwrap().resets_at_ms,
+            1_784_870_653_000
+        );
     }
 }

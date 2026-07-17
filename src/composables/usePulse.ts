@@ -1,14 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ref } from "vue";
-import type { AppSnapshot } from "../types";
+import type { AppSnapshot, InitializationEvent, ThemeMode } from "../types";
 
 const emptySnapshot: AppSnapshot = {
   sessions: [],
+  weeklyQuota: undefined,
   isLoading: true,
+  initialization: { runId: 0, phase: "idle", events: [] },
   monitoring: { enabled: false, needsRepair: false, staleCount: 0 },
   alwaysOnTop: false,
   launchAtLogin: false,
-  locale: "system"
+  locale: "system",
+  theme: "system"
 };
 
 export function usePulse() {
@@ -56,5 +59,33 @@ export function usePulse() {
     }
   }
 
-  return { snapshot, error, load, togglePin, openThread, enableMonitoring };
+  function mergeInitializationEvent(event: InitializationEvent) {
+    const previous = snapshot.value;
+    const previousRunId = previous.initialization.runId;
+    if (event.runId < previousRunId) return;
+    const existing = event.runId > previousRunId ? [] : previous.initialization.events;
+    if (existing.some((candidate) => candidate.runId === event.runId && candidate.sequence === event.sequence)) return;
+    const events = [...existing, event]
+      .sort((left, right) => left.sequence - right.sequence)
+      .slice(-120);
+    snapshot.value = {
+      ...previous,
+      initialization: { runId: event.runId, phase: event.phase, events }
+    };
+  }
+
+  async function setTheme(theme: ThemeMode) {
+    const previous = snapshot.value;
+    snapshot.value = { ...previous, theme };
+    try {
+      error.value = undefined;
+      const saved = await invoke<ThemeMode>("set_theme", { theme });
+      snapshot.value = { ...snapshot.value, theme: saved };
+    } catch (reason) {
+      snapshot.value = previous;
+      error.value = reason instanceof Error ? reason.message : String(reason);
+    }
+  }
+
+  return { snapshot, error, load, togglePin, openThread, enableMonitoring, mergeInitializationEvent, setTheme };
 }

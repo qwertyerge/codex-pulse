@@ -31,6 +31,7 @@ tauri-plugin-single-instance = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process"] }
 walkdir = "2"
 uuid = "1"
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

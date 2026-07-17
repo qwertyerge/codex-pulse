@@ -61,11 +61,20 @@ set are evicted. Therefore a normal refresh performs only inexpensive metadata
 checks for at most the existing 32 SQLite-selected candidates; unchanged files
 read and parse zero lines, and appended files read only their delta.
 
-The session registry is rebuilt from the cached accumulated transcripts. The
-latest valid weekly quota across those transcripts, ordered by its record
-timestamp, is included in the same `AppSnapshot` as the active sessions. This
-adds no second directory walk, no second JSONL pass, no new SQLite query, and
-no WebView-thread work.
+The session registry is rebuilt from the cached accumulated transcripts.
+
+Quota freshness has a separate bounded `QuotaSourceCache`: at most once per 60
+seconds it lists only today's and yesterday's `sessions/YYYY/MM/DD` directories,
+orders JSONL files by modification time, and keeps at most 16 candidates. On
+first observation it reads only the terminal 256 KiB of each candidate, skipping
+the partial first line and parsing only `token_count` records. It retains a
+per-file line count and byte cursor afterward, so unchanged candidate files
+parse zero lines and appended files parse only their delta. This avoids both
+treating the SQLite-selected active-session set as the truth source for a
+weekly quota observation and cold-replaying multi-megabyte transcripts, while
+keeping all filesystem work in the background blocking task. The newest
+unexpired observation is used; a record at or past its reset time is absent
+rather than rendered as `0m 后重置`.
 
 ## UI design
 
@@ -87,6 +96,12 @@ Rust between snapshot updates. The bar exposes `role="progressbar"` with
 When quota is unavailable, the footer stays visible but shows an hourglass and
 `周额度 · 暂不可用`; no percentage, countdown, or fabricated progress is shown.
 
+When a valid cached quota remains but no session is active, the footer enters a
+visually subdued stale state. It retains the last observed percentages and reset
+time, hides the progress bar, and explains that a newly started task restores
+automatic updates. The frontend independently checks `resetsAtMs` against its
+monotonic clock so an expired cache cannot briefly be shown as current.
+
 ## Error handling
 
 Malformed, incomplete, or unsupported JSONL records are ignored without
@@ -103,8 +118,8 @@ non-weekly buckets, newest-observation selection, integer clamping, initial
 scan, append-only delta scans, partial-tail retry, and cache reset after
 truncation or replacement.
 
-Frontend tests cover available and unavailable states, percentage text,
-countdown formatting, progress-bar ARIA values, and footer placement outside the
-session scroll container. Final verification builds the Tauri application,
-installs the generated bundle, opens it, and checks the live footer and list
-scroll behavior.
+Frontend tests cover available, stale, expired, and unavailable states,
+percentage text, countdown formatting, progress-bar ARIA values, and footer
+placement outside the session scroll container. Final verification builds the
+Tauri application, installs the generated bundle, opens it, and checks the live
+footer and list scroll behavior.

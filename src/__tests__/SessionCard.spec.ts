@@ -61,16 +61,47 @@ describe("SessionCard", () => {
 
     await wrapper.get(".session-card__recent-toggle").trigger("click");
     expect(wrapper.get(".session-card__recent-detail").text()).toContain("verified the runtime state");
+    expect(wrapper.get(".session-card__recent-age-value").text()).toBe("21s");
+    expect(wrapper.get(".session-card__recent-paused").attributes("aria-label")).toBe("Recent age paused");
 
     await wrapper.setProps({
+      nowMs: 181_000,
       session: {
         ...initialSession,
         recentEvent: { summary: "Updated styles", detail: "Updated styles", occurredAtMs: 121_000 }
       }
     });
     expect(wrapper.get(".session-card__recent-detail").text()).toContain("verified the runtime state");
+    expect(wrapper.get(".session-card__recent-age-value").text()).toBe("21s");
 
     await wrapper.get(".session-card__recent-toggle").trigger("click");
     expect(wrapper.text()).toContain("Updated styles");
+    expect(wrapper.find(".session-card__recent-paused").exists()).toBe(false);
+  });
+
+  it("renders expanded prompt and recent detail as sanitized Markdown with a fixed ago suffix", async () => {
+    const wrapper = mount(SessionCard, {
+      props: {
+        session: {
+          threadId: "00000000-0000-4000-8000-000000000001",
+          title: "Implement session monitor",
+          cwd: "/repo",
+          sessionCreatedAtMs: 1_000,
+          currentRunStartedAtMs: 61_000,
+          lastUserMessage: { content: "**Prompt**\n\n- first item\n- second item\n\n<script>alert(1)</script>", occurredAtMs: 100_000 },
+          recentEvent: { summary: "**Recent**", detail: "**Recent detail**", occurredAtMs: 100_000 }
+        },
+        nowMs: 121_000
+      }
+    });
+
+    expect(wrapper.get(".session-card__recent-age-value").text()).toBe("21s");
+    expect(wrapper.get(".session-card__recent-age-suffix").text().trim()).toBe("ago");
+    await wrapper.findAll(".session-card__meta-row")[0].trigger("click");
+    expect(wrapper.get(".markdown-content").html()).toContain("<strong>Prompt</strong>");
+    expect(wrapper.get(".markdown-content").html()).toContain("<ul>");
+    expect(wrapper.get(".markdown-content").html()).not.toContain("<script");
+    await wrapper.findAll(".session-card__meta-row")[1].trigger("click");
+    expect(wrapper.findAll(".markdown-content")[1].html()).toContain("<strong>Recent detail</strong>");
   });
 });

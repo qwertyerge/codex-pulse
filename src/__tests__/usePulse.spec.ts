@@ -20,10 +20,12 @@ describe("usePulse", () => {
         }
       ],
       isLoading: false,
+      initialization: { phase: "idle", events: [] },
       monitoring: { enabled: false, needsRepair: false, staleCount: 0 },
       alwaysOnTop: false,
       launchAtLogin: false,
-      locale: "system"
+      locale: "system",
+      theme: "system"
     });
 
     const pulse = usePulse();
@@ -31,6 +33,9 @@ describe("usePulse", () => {
 
     expect(invoke).toHaveBeenCalledWith("get_snapshot");
     expect(pulse.snapshot.value.sessions[0]?.title).toBe("Root task");
+    expect(pulse.snapshot.value.weeklyQuota).toBeUndefined();
+    expect(pulse.snapshot.value.theme).toBe("system");
+    expect(pulse.snapshot.value.initialization.events).toEqual([]);
   });
 
   it("rolls back Pin to Top when the native command fails", async () => {
@@ -62,5 +67,26 @@ describe("usePulse", () => {
     expect(invoke).toHaveBeenCalledWith("open_thread", {
       threadId: "00000000-0000-4000-8000-000000000001"
     });
+  });
+
+  it("persists an explicit theme and updates the local snapshot", async () => {
+    const pulse = usePulse();
+    invoke.mockResolvedValueOnce("dark");
+
+    await pulse.setTheme("dark");
+
+    expect(invoke).toHaveBeenLastCalledWith("set_theme", { theme: "dark" });
+    expect(pulse.snapshot.value.theme).toBe("dark");
+  });
+
+  it("keeps initialization streams isolated by run and ignores delayed prior events", () => {
+    const pulse = usePulse();
+
+    pulse.mergeInitializationEvent({ runId: 1, sequence: 1, occurredAtMs: 1, phase: "starting", summary: "first" });
+    pulse.mergeInitializationEvent({ runId: 2, sequence: 1, occurredAtMs: 2, phase: "starting", summary: "second" });
+    pulse.mergeInitializationEvent({ runId: 1, sequence: 2, occurredAtMs: 3, phase: "complete", summary: "late first" });
+
+    expect(pulse.snapshot.value.initialization.runId).toBe(2);
+    expect(pulse.snapshot.value.initialization.events.map((event) => event.summary)).toEqual(["second"]);
   });
 });
