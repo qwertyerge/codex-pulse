@@ -1,4 +1,6 @@
 import { mount } from "@vue/test-utils";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -9,6 +11,10 @@ import App from "../App.vue";
 import { i18n } from "../i18n";
 
 describe("App", () => {
+  it("uses a 60-second snapshot fallback", () => {
+    expect(readFileSync(resolve(process.cwd(), "src/App.vue"), "utf8")).toContain("setInterval(() => { void pulse.load(); }, 60_000)");
+  });
+
   it("renders the product name", () => {
     const wrapper = mount(App, { global: { plugins: [i18n] } });
     expect(wrapper.text()).toContain("Codex Pulse");

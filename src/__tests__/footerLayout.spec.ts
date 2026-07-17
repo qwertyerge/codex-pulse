@@ -41,4 +41,12 @@ describe("footer layout", () => {
     expect(footerStack).toContain("backdrop-filter: blur(32px)");
     expect(footerStack).toContain("padding:");
   });
+
+  it("stretches the bottom-anchored footer only while a background event is visible", () => {
+    expect(rule(".footer-stack")).toContain("max-height: 48px;");
+    expect(rule(".footer-stack")).toContain("transition: max-height");
+    expect(rule(".footer-stack--with-event")).toContain("max-height: 72px;");
+    expect(stylesheet).toContain(".footer-status-enter-from");
+    expect(stylesheet).toContain(".footer-status-leave-to");
+  });
 });

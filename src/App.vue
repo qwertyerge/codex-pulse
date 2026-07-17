@@ -56,7 +56,7 @@ onMounted(async () => {
   });
   theme.start();
   clock.start();
-  refresh = setInterval(() => { void pulse.load(); }, 2_000);
+  refresh = setInterval(() => { void pulse.load(); }, 60_000);
 });
 
 onUnmounted(() => {
@@ -103,11 +103,13 @@ onUnmounted(() => {
       :loading="pulse.snapshot.value.isLoading"
       :initialization="pulse.snapshot.value.initialization"
     />
-    <div class="footer-stack">
-      <InitializationStatusRow
-        v-if="showBackgroundInitialization"
-        :initialization="pulse.snapshot.value.initialization"
-      />
+    <div class="footer-stack" :class="{ 'footer-stack--with-event': showBackgroundInitialization }">
+      <Transition name="footer-status">
+        <InitializationStatusRow
+          v-if="showBackgroundInitialization"
+          :initialization="pulse.snapshot.value.initialization"
+        />
+      </Transition>
       <FooterStatus
         :quota="pulse.snapshot.value.weeklyQuota"
         :now-ms="clock.nowMs.value"
