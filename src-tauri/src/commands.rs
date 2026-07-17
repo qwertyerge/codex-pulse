@@ -16,8 +16,8 @@ use crate::codex::discovery::ScanCache;
 use crate::config::{AppConfig, ConfigStore};
 use crate::initialization::{InitializationFeed, INITIALIZATION_PROGRESS_EVENT};
 use crate::model::{
-    AppSnapshot, InitializationPhase, InitializationSnapshot, MonitoringView, RecentEvent,
-    SessionSnapshot, ThemeMode, WeeklyQuota,
+    AppSnapshot, InitializationPhase, InitializationSnapshot, LocaleMode, MonitoringView,
+    RecentEvent, SessionSnapshot, ThemeMode, WeeklyQuota,
 };
 use crate::monitor::{scan_active_sessions_with_cache, QuotaSourceCache};
 
@@ -40,6 +40,7 @@ struct CachedSnapshot {
 }
 
 const RECENT_EVENT_COALESCE_MS: i64 = 5_000;
+pub const FALLBACK_RECONCILIATION_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone)]
 struct DisplayedRecentEvent {
@@ -184,7 +185,7 @@ pub fn snapshot_for_home(codex_home: &Path, now_ms: i64) -> Result<AppSnapshot> 
         },
         always_on_top: false,
         launch_at_login: false,
-        locale: "system".into(),
+        locale: LocaleMode::System,
         theme: ThemeMode::System,
     })
 }
@@ -196,6 +197,18 @@ pub fn set_always_on_top_config(state: &AppState, value: bool) -> Result<()> {
         .map_err(|_| anyhow::anyhow!("Codex Pulse config lock is poisoned"))?;
     let mut next = current.clone();
     next.always_on_top = value;
+    state.store.save(&next)?;
+    *current = next;
+    Ok(())
+}
+
+pub fn set_locale_config(state: &AppState, locale: LocaleMode) -> Result<()> {
+    let mut current = state
+        .config
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Codex Pulse config lock is poisoned"))?;
+    let mut next = current.clone();
+    next.locale = locale;
     state.store.save(&next)?;
     *current = next;
     Ok(())
@@ -215,6 +228,12 @@ pub fn set_theme(theme: ThemeMode, state: State<'_, AppState>) -> Result<ThemeMo
 }
 
 #[tauri::command]
+pub fn set_locale(locale: LocaleMode, state: State<'_, AppState>) -> Result<LocaleMode, String> {
+    set_locale_config(&state, locale).map_err(|error| error.to_string())?;
+    Ok(locale)
+}
+
+#[tauri::command]
 pub fn get_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     let (sessions, weekly_quota) = state.cached_snapshot();
     let mut snapshot = AppSnapshot {
@@ -230,7 +249,7 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
         },
         always_on_top: false,
         launch_at_login: false,
-        locale: "system".into(),
+        locale: LocaleMode::System,
         theme: ThemeMode::System,
     };
     let config = state
@@ -239,7 +258,7 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
         .map_err(|_| "Codex Pulse config lock is poisoned".to_string())?;
     snapshot.always_on_top = config.always_on_top;
     snapshot.launch_at_login = config.launch_at_login;
-    snapshot.locale = config.locale.clone();
+    snapshot.locale = config.locale;
     snapshot.theme = config.theme;
     let hooks_installed = crate::hook_config::is_installed(&state.codex_home);
     snapshot.monitoring.enabled = config.monitoring_enabled && hooks_installed;
@@ -342,7 +361,10 @@ pub fn start_fallback_reconciliation(app: tauri::AppHandle) {
     schedule_refresh(app.clone());
     tauri::async_runtime::spawn(async move {
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(
+                FALLBACK_RECONCILIATION_SECONDS,
+            ))
+            .await;
             schedule_refresh(app.clone());
         }
     });
@@ -415,10 +437,11 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        coalesce_recent_events, set_always_on_top_config, validate_external_url, AppState,
+        coalesce_recent_events, set_always_on_top_config, set_locale_config, validate_external_url,
+        AppState, FALLBACK_RECONCILIATION_SECONDS,
     };
     use crate::config::ConfigStore;
-    use crate::model::{RecentEvent, RecentEventPriority, SessionSnapshot};
+    use crate::model::{LocaleMode, RecentEvent, RecentEventPriority, SessionSnapshot};
 
     fn session(event: Option<RecentEvent>) -> SessionSnapshot {
         SessionSnapshot {
@@ -496,6 +519,26 @@ mod tests {
         ] {
             assert!(validate_external_url(url).is_err());
         }
+    }
+
+    #[test]
+    fn fallback_reconciliation_is_limited_to_one_minute() {
+        assert_eq!(FALLBACK_RECONCILIATION_SECONDS, 60);
+    }
+
+    #[test]
+    fn locale_changes_persist_through_app_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::new(
+            temp.path().to_owned(),
+            ConfigStore::new(temp.path().join("config.json")),
+        )
+        .unwrap();
+
+        set_locale_config(&state, LocaleMode::German).unwrap();
+
+        assert_eq!(state.config.lock().unwrap().locale, LocaleMode::German);
+        assert_eq!(state.store.load().unwrap().locale, LocaleMode::German);
     }
 
     #[test]

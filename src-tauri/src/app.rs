@@ -25,6 +25,7 @@ pub fn run() -> anyhow::Result<()> {
             crate::commands::get_snapshot,
             crate::commands::set_always_on_top,
             crate::commands::set_theme,
+            crate::commands::set_locale,
             crate::commands::enable_monitoring,
             crate::commands::open_thread,
             crate::commands::open_external_url

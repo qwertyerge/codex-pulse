@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::model::ThemeMode;
+use crate::model::{LocaleMode, ThemeMode};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -14,7 +14,7 @@ pub struct AppConfig {
     pub window_visible: bool,
     pub launch_at_login: bool,
     pub monitoring_enabled: bool,
-    pub locale: String,
+    pub locale: LocaleMode,
     pub theme: ThemeMode,
 }
 
@@ -26,7 +26,7 @@ impl Default for AppConfig {
             window_visible: true,
             launch_at_login: false,
             monitoring_enabled: false,
-            locale: "system".into(),
+            locale: LocaleMode::System,
             theme: ThemeMode::System,
         }
     }
@@ -77,7 +77,7 @@ fn ensure_parent(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{AppConfig, ConfigStore};
-    use crate::model::ThemeMode;
+    use crate::model::{LocaleMode, ThemeMode};
 
     #[test]
     fn persists_the_pin_state_across_loads() {
@@ -113,5 +113,20 @@ mod tests {
 
         assert_eq!(store.load().unwrap().theme, ThemeMode::Dark);
         assert_eq!(AppConfig::default().theme, ThemeMode::System);
+    }
+
+    #[test]
+    fn persists_an_explicit_locale_choice() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = ConfigStore::new(temp.path().join("config.json"));
+        let config = AppConfig {
+            locale: LocaleMode::French,
+            ..AppConfig::default()
+        };
+
+        store.save(&config).unwrap();
+
+        assert_eq!(store.load().unwrap().locale, LocaleMode::French);
+        assert_eq!(AppConfig::default().locale, LocaleMode::System);
     }
 }

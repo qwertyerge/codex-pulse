@@ -15,6 +15,26 @@ impl Default for ThemeMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LocaleMode {
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "fr")]
+    French,
+    #[serde(rename = "de")]
+    German,
+}
+
+impl Default for LocaleMode {
+    fn default() -> Self {
+        Self::System
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum InitializationPhase {
     Idle,
@@ -121,7 +141,7 @@ pub struct AppSnapshot {
     pub monitoring: MonitoringView,
     pub always_on_top: bool,
     pub launch_at_login: bool,
-    pub locale: String,
+    pub locale: LocaleMode,
     pub theme: ThemeMode,
 }
 
