@@ -1,0 +1,36 @@
+[package]
+name = "codex-pulse"
+version = "0.1.0"
+description = "A local macOS monitor for active Codex sessions"
+authors = ["Codex Pulse contributors"]
+edition = "2021"
+rust-version = "1.82"
+default-run = "CodexPulse"
+
+[[bin]]
+name = "CodexPulse"
+path = "src/main.rs"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+dirs = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri-plugin-liquid-glass = "0.1"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process"] }
+walkdir = "2"
+uuid = "1"
+
+[dev-dependencies]
+tempfile = "3"
