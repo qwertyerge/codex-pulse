@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { useI18n } from "vue-i18n";
 import EmptyState from "./components/EmptyState.vue";
 import FooterStatus from "./components/FooterStatus.vue";
 import InitializationStatusRow from "./components/InitializationStatusRow.vue";
@@ -10,9 +11,11 @@ import TopBar from "./components/TopBar.vue";
 import { usePulse } from "./composables/usePulse";
 import { useMonotonicClock } from "./composables/useMonotonicClock";
 import { useTheme } from "./composables/useTheme";
+import { useLocale } from "./composables/useLocale";
 import type { InitializationEvent } from "./types";
 
 const pulse = usePulse();
+const { t } = useI18n();
 const clock = useMonotonicClock();
 let refresh: ReturnType<typeof setInterval> | undefined;
 let unlisten: UnlistenFn | undefined;
@@ -21,6 +24,7 @@ let backgroundInitializationHideTimer: ReturnType<typeof setTimeout> | undefined
 let displayedBackgroundInitializationRun = -1;
 let terminalBackgroundInitializationRun = -1;
 const theme = useTheme(computed(() => pulse.snapshot.value.theme));
+const stopLocale = useLocale(computed(() => pulse.snapshot.value.locale));
 const initialScreenFinished = ref(false);
 const showBackgroundInitialization = ref(false);
 
@@ -62,6 +66,7 @@ onUnmounted(() => {
   unlisten?.();
   unlistenInitialization?.();
   theme.stop();
+  stopLocale();
 });
 </script>
 
@@ -71,8 +76,10 @@ onUnmounted(() => {
       :active-count="pulse.snapshot.value.sessions.length"
       :always-on-top="pulse.snapshot.value.alwaysOnTop"
       :theme="pulse.snapshot.value.theme"
+      :locale="pulse.snapshot.value.locale"
       @toggle-pin="pulse.togglePin"
       @set-theme="pulse.setTheme"
+      @set-locale="pulse.setLocale"
     />
     <MonitoringBanner
       :enabled="pulse.snapshot.value.monitoring.enabled"
@@ -81,7 +88,7 @@ onUnmounted(() => {
       @enable="pulse.enableMonitoring"
     />
     <p v-if="pulse.error.value" class="pulse-shell__error" role="status">{{ pulse.error.value }}</p>
-    <TransitionGroup v-if="pulse.snapshot.value.sessions.length" name="task-card" tag="section" class="session-list" aria-label="Active Codex sessions">
+    <TransitionGroup v-if="pulse.snapshot.value.sessions.length" name="task-card" tag="section" class="session-list" :aria-label="t('empty.emptyLabel')">
       <SessionCard
         v-for="session in pulse.snapshot.value.sessions"
         :key="session.threadId"
@@ -89,6 +96,7 @@ onUnmounted(() => {
         :now-ms="clock.nowMs.value"
         @open="pulse.openThread"
       />
+      <span key="session-list-end" class="session-list__end" aria-hidden="true">{{ t("list.end") }}</span>
     </TransitionGroup>
     <EmptyState
       v-else

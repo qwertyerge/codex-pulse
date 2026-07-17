@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "vue-i18n";
 import { formatQuotaReset } from "../lib/duration";
 import type { WeeklyQuota } from "../types";
 
 const props = defineProps<{ quota?: WeeklyQuota; nowMs: number; activeSessionCount: number }>();
+const { t } = useI18n();
 
 const isAvailable = computed(() => Boolean(props.quota && props.quota.resetsAtMs > props.nowMs));
 const isStale = computed(() => isAvailable.value && props.activeSessionCount === 0);
@@ -15,7 +17,7 @@ const resetCountdown = computed(() => isAvailable.value && props.quota && format
   <footer
     class="quota-footer"
     :class="{ 'quota-footer--unavailable': !isAvailable, 'quota-footer--stale': isStale }"
-    aria-label="Codex weekly quota"
+    :aria-label="t('quota.aria')"
   >
     <svg class="quota-footer__icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <path d="M6 3h12M6 21h12M7 3c0 4 2 5 5 9-3 4-5 5-5 9M17 3c0 4-2 5-5 9 3 4 5 5 5 9M9.2 16h5.6" />
@@ -23,22 +25,22 @@ const resetCountdown = computed(() => isAvailable.value && props.quota && format
     <template v-if="isAvailable && quota">
       <div v-if="isStale" class="quota-footer__content quota-footer__stale-content">
         <div class="quota-footer__line">
-          <strong>周额度</strong>
-          <span>上次已用 {{ usedPercent }}% · 剩余 <b class="quota-footer__remaining-value">{{ quota.remainingPercent }}%</b></span>
-          <time>{{ resetCountdown }} 后重置</time>
+          <strong>{{ t("quota.label") }}</strong>
+          <span>{{ t("quota.usedRemainingPrefix", { used: usedPercent }) }} <b class="quota-footer__remaining-value">{{ quota.remainingPercent }}%</b></span>
+          <time>{{ t("quota.resets", { countdown: resetCountdown }) }}</time>
         </div>
-        <p>暂无活跃会话；新任务开始后将自动恢复更新</p>
+        <p>{{ t("quota.stale") }}</p>
       </div>
       <div v-else class="quota-footer__content">
         <div class="quota-footer__line">
-          <strong>周额度</strong>
-          <span>已用 {{ usedPercent }}% · 剩余 <b class="quota-footer__remaining-value">{{ quota.remainingPercent }}%</b></span>
-          <time>{{ resetCountdown }} 后重置</time>
+          <strong>{{ t("quota.label") }}</strong>
+          <span>{{ t("quota.usedRemainingPrefix", { used: usedPercent }) }} <b class="quota-footer__remaining-value">{{ quota.remainingPercent }}%</b></span>
+          <time>{{ t("quota.resets", { countdown: resetCountdown }) }}</time>
         </div>
         <div
           class="quota-footer__progress"
           role="progressbar"
-          aria-label="Codex weekly quota used"
+          :aria-label="t('quota.progressAria')"
           aria-valuemin="0"
           aria-valuemax="100"
           :aria-valuenow="usedPercent"
@@ -47,6 +49,6 @@ const resetCountdown = computed(() => isAvailable.value && props.quota && format
         </div>
       </div>
     </template>
-    <span v-else class="quota-footer__unavailable">周额度 · 暂不可用</span>
+    <span v-else class="quota-footer__unavailable">{{ t("quota.unavailable") }}</span>
   </footer>
 </template>

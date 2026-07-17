@@ -19,15 +19,16 @@ describe("footer layout", () => {
     expect(rule(".pulse-shell--background-refresh")).toContain("--footer-stack-reserve: 72px;");
   });
 
-  it("hides the native scrollbar without reserving space and marks the list end", () => {
+  it("hides the native scrollbar without reserving space and styles the localizable list end", () => {
     expect(rule(".session-list")).not.toContain("scrollbar-gutter");
     expect(rule(".session-list::-webkit-scrollbar")).toContain("display: none;");
-    expect(rule(".session-list::after")).toContain('content: "END";');
+    expect(rule(".session-list__end")).toContain("height: 1px;");
+    expect(stylesheet).not.toContain('content: "END"');
   });
 
   it("aligns cards with the footer and leaves END a separator gap", () => {
     expect(rule(".session-list")).toContain("padding: 0;");
-    const endMarker = rule(".session-list::after");
+    const endMarker = rule(".session-list__end");
     expect(endMarker).toContain("height: 1px;");
     expect(endMarker).toContain("linear-gradient");
     expect(endMarker).toContain("transparent calc(50% - 22px)");

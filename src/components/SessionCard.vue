@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ChevronDown, ChevronUp, ExternalLink, Pause } from "@lucide/vue";
 import { computed, onMounted, ref } from "vue";
+import { useI18n } from "vue-i18n";
 import { formatDuration, formatRecentAgeValue } from "../lib/duration";
 import { measureRecentAgeWidth } from "../lib/recentAgeWidth";
 import type { RecentEvent, SessionSnapshot, UserMessage } from "../types";
@@ -8,6 +9,7 @@ import MarkdownContent from "./MarkdownContent.vue";
 
 const props = defineProps<{ session: SessionSnapshot; nowMs: number }>();
 defineEmits<{ open: [threadId: string] }>();
+const { t } = useI18n();
 
 const expanded = ref(false);
 const frozenEvent = ref<RecentEvent>();
@@ -55,7 +57,7 @@ function togglePrompt() {
     <button
       class="session-card__main"
       type="button"
-      :aria-label="`Open Codex task: ${session.title}`"
+      :aria-label="t('session.open', { title: session.title })"
       @click="$emit('open', session.threadId)"
     >
       <span class="session-card__heading">
@@ -65,14 +67,14 @@ function togglePrompt() {
       </span>
       <span class="session-card__path" :title="session.cwd">{{ session.cwd }}</span>
       <span class="session-card__timers">
-        <span class="session-card__timer"><small>Current run</small><strong>{{ currentRun }}</strong></span>
-        <span class="session-card__timer"><small>Session age</small><strong>{{ sessionAge }}</strong></span>
+        <span class="session-card__timer"><small>{{ t("session.currentRun") }}</small><strong>{{ currentRun }}</strong></span>
+        <span class="session-card__timer"><small>{{ t("session.sessionAge") }}</small><strong>{{ sessionAge }}</strong></span>
       </span>
     </button>
     <div v-if="displayedPrompt" class="session-card__meta">
       <button class="session-card__meta-row" type="button" :aria-expanded="promptExpanded" @click="togglePrompt">
         <span class="session-card__recent">
-          <small>Last prompt</small>
+          <small>{{ t("session.lastPrompt") }}</small>
           <span v-if="!promptExpanded" class="session-card__recent-summary">{{ displayedPrompt.content }}</span>
         </span>
         <ChevronUp v-if="promptExpanded" class="session-card__meta-toggle" aria-hidden="true" />
@@ -81,13 +83,13 @@ function togglePrompt() {
       <MarkdownContent v-if="promptExpanded" class="session-card__recent-detail" :source="displayedPrompt.content" />
     </div>
     <div v-if="displayedEvent" class="session-card__meta">
-      <button class="session-card__meta-row session-card__recent-toggle" type="button" :aria-expanded="expanded" :title="expanded ? 'Collapse recent event' : 'Expand recent event'" @click="toggleRecentEvent">
+      <button class="session-card__meta-row session-card__recent-toggle" type="button" :aria-expanded="expanded" :title="expanded ? t('session.collapseRecent') : t('session.expandRecent')" @click="toggleRecentEvent">
         <span class="session-card__recent">
           <small ref="recentAgeLabel" class="session-card__recent-time">
-            <span>Recent · </span>
+            <span>{{ t("session.recent") }} · </span>
             <span class="session-card__recent-age-value" :style="recentAgeWidth ? { width: `${recentAgeWidth}px` } : undefined">{{ recentEventAge }}</span>
-            <span class="session-card__recent-age-suffix">&nbsp;ago</span>
-            <span v-if="expanded" class="session-card__recent-paused" role="img" aria-label="Recent age paused" title="Recent age paused while expanded">
+            <span class="session-card__recent-age-suffix">&nbsp;{{ t("session.ago") }}</span>
+            <span v-if="expanded" class="session-card__recent-paused" role="img" :aria-label="t('session.paused')" :title="t('session.pausedTitle')">
               <Pause aria-hidden="true" />
             </span>
             <span ref="recentAgeMeasure" class="session-card__recent-age-measure" aria-hidden="true">

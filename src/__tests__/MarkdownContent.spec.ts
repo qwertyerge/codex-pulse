@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 import MarkdownContent from "../components/MarkdownContent.vue";
+import { i18n } from "../i18n";
 
 describe("MarkdownContent", () => {
   beforeEach(() => invoke.mockReset());
@@ -12,7 +13,8 @@ describe("MarkdownContent", () => {
     const wrapper = mount(MarkdownContent, {
       props: {
         source: "**safe**\n\n<script>alert(1)</script><img src=\"https://tracker.example/pixel\"><span>raw</span>\n\n[link](https://example.com)\n\n[bad](javascript:alert(1))"
-      }
+      },
+      global: { plugins: [i18n] }
     });
 
     expect(wrapper.html()).toContain("<strong>safe</strong>");
@@ -25,7 +27,8 @@ describe("MarkdownContent", () => {
 
   it("hands normal links and image placeholders to the operating system", async () => {
     const wrapper = mount(MarkdownContent, {
-      props: { source: "[reference](https://example.com/docs) and ![Architecture](https://example.com/diagram.png \"System diagram\")" }
+      props: { source: "[reference](https://example.com/docs) and ![Architecture](https://example.com/diagram.png \"System diagram\")" },
+      global: { plugins: [i18n] }
     });
 
     expect(wrapper.find("img").exists()).toBe(false);

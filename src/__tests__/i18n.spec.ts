@@ -27,5 +27,6 @@ describe("localization runtime", () => {
 
     expect(i18n.global.locale.value).toBe("de");
     stop();
+    i18n.global.locale.value = "en";
   });
 });

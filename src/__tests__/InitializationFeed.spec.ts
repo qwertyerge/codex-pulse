@@ -1,6 +1,7 @@
 import { mount } from "@vue/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import InitializationFeed from "../components/InitializationFeed.vue";
+import { i18n } from "../i18n";
 
 describe("InitializationFeed", () => {
   afterEach(() => vi.useRealTimers());
@@ -17,12 +18,13 @@ describe("InitializationFeed", () => {
             { runId: 4, sequence: 2, occurredAtMs: 2, phase: "readingQuota", summary: "Reading quota" }
           ]
         }
-      }
+      },
+      global: { plugins: [i18n] }
     });
 
     expect(wrapper.findAll("li")).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(160);
-    expect(wrapper.findAll(".initialization-feed__summary").map((event) => event.text())).toEqual(["Starting", "Reading quota"]);
+    expect(wrapper.findAll(".initialization-feed__summary").map((event) => event.text())).toEqual(["Starting refresh", "Reading weekly quota"]);
   });
 
   it("marks the latest in-flight line as a live log with looping dots", async () => {
@@ -36,7 +38,8 @@ describe("InitializationFeed", () => {
             { runId: 4, sequence: 1, occurredAtMs: 1, phase: "readingQuota", summary: "Reading quota" }
           ]
         }
-      }
+      },
+      global: { plugins: [i18n] }
     });
 
     await vi.advanceTimersByTimeAsync(1);
