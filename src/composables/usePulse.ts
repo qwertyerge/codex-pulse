@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { ref } from "vue";
-import type { AppSnapshot, InitializationEvent, ThemeMode } from "../types";
+import type { AppSnapshot, InitializationEvent, LocaleMode, ThemeMode } from "../types";
 
 const emptySnapshot: AppSnapshot = {
   sessions: [],
@@ -87,5 +87,18 @@ export function usePulse() {
     }
   }
 
-  return { snapshot, error, load, togglePin, openThread, enableMonitoring, mergeInitializationEvent, setTheme };
+  async function setLocale(locale: LocaleMode) {
+    const previous = snapshot.value;
+    snapshot.value = { ...previous, locale };
+    try {
+      error.value = undefined;
+      const saved = await invoke<LocaleMode>("set_locale", { locale });
+      snapshot.value = { ...snapshot.value, locale: saved };
+    } catch (reason) {
+      snapshot.value = previous;
+      error.value = reason instanceof Error ? reason.message : String(reason);
+    }
+  }
+
+  return { snapshot, error, load, togglePin, openThread, enableMonitoring, mergeInitializationEvent, setTheme, setLocale };
 }

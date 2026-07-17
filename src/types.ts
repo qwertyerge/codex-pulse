@@ -29,6 +29,7 @@ export interface WeeklyQuota {
 }
 
 export type ThemeMode = "system" | "light" | "dark";
+export type LocaleMode = "system" | "zh-CN" | "en" | "fr" | "de";
 export type InitializationPhase = "idle" | "starting" | "discoveringCandidates" | "readingQuota" | "reconcilingSessions" | "complete" | "failed";
 export interface InitializationEvent {
   runId: number;
@@ -51,6 +52,6 @@ export interface AppSnapshot {
   monitoring: MonitoringView;
   alwaysOnTop: boolean;
   launchAtLogin: boolean;
-  locale: "system" | "en" | "zh-CN";
+  locale: LocaleMode;
   theme: ThemeMode;
 }

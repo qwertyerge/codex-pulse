@@ -79,6 +79,17 @@ describe("usePulse", () => {
     expect(pulse.snapshot.value.theme).toBe("dark");
   });
 
+  it("rolls back a locale when native persistence fails", async () => {
+    const pulse = usePulse();
+    invoke.mockRejectedValueOnce(new Error("config unavailable"));
+
+    await pulse.setLocale("fr");
+
+    expect(invoke).toHaveBeenLastCalledWith("set_locale", { locale: "fr" });
+    expect(pulse.snapshot.value.locale).toBe("system");
+    expect(pulse.error.value).toContain("config unavailable");
+  });
+
   it("keeps initialization streams isolated by run and ignores delayed prior events", () => {
     const pulse = usePulse();
 
