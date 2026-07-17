@@ -54,23 +54,25 @@ function togglePrompt() {
 
 <template>
   <article class="session-card">
-    <button
-      class="session-card__main"
-      type="button"
-      :aria-label="t('session.open', { title: session.title })"
-      @click="$emit('open', session.threadId)"
-    >
+    <div class="session-card__main">
       <span class="session-card__heading">
         <span class="session-card__active-dot" aria-hidden="true" />
         <span class="session-card__title" :title="session.title">{{ session.title }}</span>
-        <ExternalLink class="session-card__open-icon" aria-hidden="true" />
+        <button
+          class="session-card__open"
+          type="button"
+          :aria-label="t('session.open', { title: session.title })"
+          @click="$emit('open', session.threadId)"
+        >
+          <ExternalLink class="session-card__open-icon" aria-hidden="true" />
+        </button>
       </span>
       <span class="session-card__path" :title="session.cwd">{{ session.cwd }}</span>
       <span class="session-card__timers">
         <span class="session-card__timer"><small>{{ t("session.currentRun") }}</small><strong>{{ currentRun }}</strong></span>
         <span class="session-card__timer"><small>{{ t("session.sessionAge") }}</small><strong>{{ sessionAge }}</strong></span>
       </span>
-    </button>
+    </div>
     <div v-if="displayedPrompt" class="session-card__meta">
       <button class="session-card__meta-row" type="button" :aria-expanded="promptExpanded" @click="togglePrompt">
         <span class="session-card__recent">

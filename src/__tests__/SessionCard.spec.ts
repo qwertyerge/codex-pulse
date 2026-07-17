@@ -49,6 +49,30 @@ describe("SessionCard", () => {
     expect(wrapper.get(".session-card__recent").text()).toContain("Completed cargo test");
   });
 
+  it("opens Codex only from the dedicated Open icon action", async () => {
+    const wrapper = mount(SessionCard, {
+      props: {
+        session: {
+          threadId: "00000000-0000-4000-8000-000000000001",
+          title: "Implement session monitor",
+          cwd: "/repo",
+          sessionCreatedAtMs: 1_000,
+          currentRunStartedAtMs: 61_000
+        },
+        nowMs: 121_000
+      },
+      global: { plugins: [i18n] }
+    });
+
+    expect(wrapper.get(".session-card__main").element.tagName).not.toBe("BUTTON");
+    await wrapper.get(".session-card__main").trigger("click");
+    expect(wrapper.emitted("open")).toBeUndefined();
+
+    await wrapper.get(".session-card__open").trigger("click");
+    expect(wrapper.emitted("open")).toEqual([["00000000-0000-4000-8000-000000000001"]]);
+    expect(wrapper.get(".session-card__open").attributes("aria-label")).toContain("Open Codex task");
+  });
+
   it("freezes the expanded event until it is collapsed", async () => {
     const initialSession = {
       threadId: "00000000-0000-4000-8000-000000000001",
