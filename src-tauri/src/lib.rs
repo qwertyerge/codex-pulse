@@ -5,6 +5,7 @@ pub mod config;
 pub mod deep_link;
 pub mod hook;
 pub mod hook_config;
+pub mod initialization;
 pub mod model;
 pub mod monitor;
 pub mod registry;

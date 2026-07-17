@@ -24,8 +24,11 @@ pub fn run() -> anyhow::Result<()> {
         .invoke_handler(tauri::generate_handler![
             crate::commands::get_snapshot,
             crate::commands::set_always_on_top,
+            crate::commands::set_theme,
+            crate::commands::set_locale,
             crate::commands::enable_monitoring,
-            crate::commands::open_thread
+            crate::commands::open_thread,
+            crate::commands::open_external_url
         ])
         .run(tauri::generate_context!())
         .map_err(|error| anyhow::anyhow!(error))
