@@ -310,7 +310,7 @@
 - `footer-stack--with-event` is present exactly while `showBackgroundInitialization` is true.
 - The WebView refresh interval is `60_000` milliseconds.
 - `footer-status-enter-*` and `footer-status-leave-*` animate only the one-line event; the footer surface animates `max-height` from 48px to 72px with bottom anchoring.
-- Consecutive background phases debounce for `600` milliseconds and render only the complete or failed terminal event unless a nonterminal phase stalls.
+- Consecutive background phases and hook-triggered runs share one `600`-millisecond quiet period, rendering only the latest complete or failed terminal event unless a nonterminal phase stalls.
 
 - [ ] **Step 1: Write failing tests for cadence and animated state**
 
@@ -350,7 +350,7 @@
 
 - [ ] **Step 3: Implement bottom-anchored stretch motion**
 
-  Change App's snapshot interval to 60 seconds. Move footer-event visibility into a dedicated composable so it can debounce intermediate initialization phases by 600 ms, expose stalled progress, show terminal events immediately, and retain the existing 2.2-second terminal hide delay. Apply the state class and transition wrapper:
+  Change App's snapshot interval to 60 seconds. Move footer-event visibility into a dedicated composable so it can debounce intermediate initialization phases and hook-triggered runs by one 600 ms quiet period, expose stalled progress, render the final terminal event only after that quiet period, and retain the existing 2.2-second terminal hide delay. Apply the state class and transition wrapper:
 
   ```vue
   <div class="footer-stack" :class="{ 'footer-stack--with-event': showBackgroundInitialization }">
@@ -429,12 +429,12 @@
 ## Execution evidence — 2026-07-17
 
 All five tasks were executed with red-green tests before their implementation.
-The completed verification set is: Rust format check; 47 native tests; 45
+The completed verification set is: Rust format check; 47 native tests; 46
 frontend assertions; production frontend build; debug native bundle and
 installed-app executable hash comparison. Native interaction confirmed System,
 Chinese, English, French, and German UI states; a 520-point resize followed by
 scrolling to the list end kept the final card and localized end separator clear
-of the animated floating footer. The 600-millisecond footer debounce was
-verified with fake timers and a fresh live refresh: intermediate phases remain
-out of the footer, the terminal status appears, and it hides after a quiet
-interval.
+of the animated floating footer. The 600-millisecond global footer quiet period
+was verified with fake timers and a fresh live refresh: intermediate phases
+remain out of the footer, two hook terminal runs 300 ms apart collapse to the
+last terminal, and the row hides after a quiet interval.

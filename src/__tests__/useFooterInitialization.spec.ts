@@ -14,7 +14,7 @@ function snapshot(runId: number, phase: InitializationSnapshot["phase"]): Initia
 describe("useFooterInitialization", () => {
   afterEach(() => vi.useRealTimers());
 
-  it("shows only a terminal event for a continuous background refresh", async () => {
+  it("shows only a terminal event after a continuous background refresh becomes quiet", async () => {
     vi.useFakeTimers();
     const initialization = ref(snapshot(1, "complete"));
     const footer = useFooterInitialization(initialization);
@@ -32,8 +32,31 @@ describe("useFooterInitialization", () => {
     initialization.value = snapshot(2, "complete");
     await nextTick();
 
+    expect(footer.visible.value).toBe(false);
+    await vi.advanceTimersByTimeAsync(FOOTER_STATUS_THROTTLE_MS);
     expect(footer.visible.value).toBe(true);
     expect(footer.initialization.value?.phase).toBe("complete");
+    footer.stop();
+  });
+
+  it("merges hook-triggered runs into one final terminal status", async () => {
+    vi.useFakeTimers();
+    const initialization = ref(snapshot(1, "complete"));
+    const footer = useFooterInitialization(initialization);
+    await nextTick();
+
+    initialization.value = snapshot(2, "complete");
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(300);
+    initialization.value = snapshot(3, "complete");
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(footer.visible.value).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(footer.visible.value).toBe(true);
+    expect(footer.initialization.value?.runId).toBe(3);
     footer.stop();
   });
 

@@ -9,7 +9,6 @@ export function useFooterInitialization(source: Readonly<Ref<InitializationSnaps
   const initialization = ref<InitializationSnapshot>();
   let initialScreenFinished = false;
   let activeRunId = -1;
-  let terminalRunId = -1;
   let displayTimer: ReturnType<typeof setTimeout> | undefined;
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -30,19 +29,19 @@ export function useFooterInitialization(source: Readonly<Ref<InitializationSnaps
     visible.value = true;
   }
 
-  function scheduleProgress(snapshot: InitializationSnapshot) {
+  function scheduleStatus(snapshot: InitializationSnapshot, terminal: boolean) {
     clearDisplayTimer();
+    clearHideTimer();
     visible.value = false;
     initialization.value = undefined;
     displayTimer = setTimeout(() => {
       show(snapshot);
+      if (terminal) scheduleHide(snapshot.runId);
       displayTimer = undefined;
     }, FOOTER_STATUS_THROTTLE_MS);
   }
 
   function scheduleHide(runId: number) {
-    if (terminalRunId === runId) return;
-    terminalRunId = runId;
     clearHideTimer();
     hideTimer = setTimeout(() => {
       if (activeRunId === runId) {
@@ -64,7 +63,6 @@ export function useFooterInitialization(source: Readonly<Ref<InitializationSnaps
 
     if (snapshot.runId !== activeRunId) {
       activeRunId = snapshot.runId;
-      terminalRunId = -1;
       clearDisplayTimer();
       clearHideTimer();
       visible.value = false;
@@ -72,13 +70,11 @@ export function useFooterInitialization(source: Readonly<Ref<InitializationSnaps
     }
 
     if (terminal) {
-      clearDisplayTimer();
-      show(snapshot);
-      scheduleHide(snapshot.runId);
+      scheduleStatus(snapshot, true);
       return;
     }
 
-    scheduleProgress(snapshot);
+    scheduleStatus(snapshot, false);
   }, { deep: true, immediate: true });
 
   return {
