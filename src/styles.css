@@ -107,10 +107,10 @@ button { font: inherit; }
 }
 .session-card:hover { border-color: rgba(52, 120, 246, 0.32); background: rgba(255, 255, 255, 0.72); }
 .session-card__main { display: block; width: 100%; min-width: 0; padding: 11px; }
-.session-card__heading { width: 100%; max-width: 100%; gap: 7px; min-width: 0; }
+.session-card__heading { position: relative; width: 100%; max-width: 100%; min-width: 0; gap: 7px; padding-right: 15px; }
 .session-card__active-dot { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 999px; background: #28b16c; box-shadow: 0 0 0 3px rgba(40, 177, 108, 0.12); animation: pulse-dot 1.8s ease-in-out infinite; }
 .session-card__title { min-width: 0; flex: 1; overflow: hidden; font-size: 15px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
-.session-card__open { display: inline-grid; width: 15px; height: 15px; flex: 0 0 15px; padding: 0; place-items: center; border: 0; color: #657086; background: transparent; cursor: pointer; }
+.session-card__open { position: absolute; top: 50%; right: -4.5px; display: inline-grid; width: 24px; height: 24px; padding: 0; place-items: center; border: 0; color: #657086; background: transparent; cursor: pointer; transform: translateY(-50%); }
 .session-card__open:hover { color: #3478f6; }
 .session-card__open-icon { width: 15px; height: 15px; flex: 0 0 15px; fill: none; stroke: #657086; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.65; }
 .session-card__open:hover .session-card__open-icon { stroke: currentColor; }

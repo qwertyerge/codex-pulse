@@ -49,4 +49,17 @@ describe("footer layout", () => {
     expect(stylesheet).toContain(".footer-status-enter-from");
     expect(stylesheet).toContain(".footer-status-leave-to");
   });
+
+  it("keeps the 15px Open icon inside a 24px non-intrusive hit target", () => {
+    const heading = rule(".session-card__heading");
+    const open = rule(".session-card__open");
+    expect(heading).toContain("position: relative;");
+    expect(heading).toContain("padding-right: 15px;");
+    expect(open).toContain("position: absolute;");
+    expect(open).toContain("width: 24px;");
+    expect(open).toContain("height: 24px;");
+    expect(open).toContain("right: -4.5px;");
+    expect(rule(".session-card__open-icon")).toContain("width: 15px;");
+    expect(rule(".session-card__open-icon")).toContain("height: 15px;");
+  });
 });

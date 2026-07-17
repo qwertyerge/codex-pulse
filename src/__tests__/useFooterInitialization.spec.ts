@@ -70,4 +70,28 @@ describe("useFooterInitialization", () => {
     expect(footer.visible.value).toBe(false);
     footer.stop();
   });
+
+  it("restarts the terminal leave delay when another terminal snapshot arrives", async () => {
+    vi.useFakeTimers();
+    const initialization = ref(snapshot(1, "complete"));
+    const footer = useFooterInitialization(initialization);
+    await nextTick();
+
+    initialization.value = snapshot(2, "complete");
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(FOOTER_STATUS_THROTTLE_MS);
+    expect(footer.visible.value).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(FOOTER_STATUS_HIDE_MS - 1);
+    initialization.value = snapshot(3, "complete");
+    await nextTick();
+    expect(footer.visible.value).toBe(true);
+    expect(footer.initialization.value?.runId).toBe(3);
+
+    await vi.advanceTimersByTimeAsync(FOOTER_STATUS_HIDE_MS - 1);
+    expect(footer.visible.value).toBe(true);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(footer.visible.value).toBe(false);
+    footer.stop();
+  });
 });
