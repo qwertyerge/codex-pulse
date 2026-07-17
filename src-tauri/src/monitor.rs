@@ -305,6 +305,7 @@ pub fn scan_active_sessions_with_cache(
             registry.apply_user_message(&thread_id, message);
         }
     }
+    registry.mark_stale(now_ms);
 
     Ok(ScanResult {
         sessions: registry.snapshots(now_ms),
@@ -374,6 +375,54 @@ mod tests {
             1_784_271_780_000
         );
         assert_eq!(result.weekly_quota.as_ref().unwrap().used_percent, 81);
+    }
+
+    #[test]
+    fn excludes_a_stale_unfinished_descendant_when_its_root_has_completed() {
+        let temp = tempfile::tempdir().unwrap();
+        let codex_home = temp.path();
+        let sessions = codex_home.join("sessions/2026/07/17");
+        fs::create_dir_all(&sessions).unwrap();
+        fs::write(
+            sessions.join("root.jsonl"),
+            concat!(
+                "{\"timestamp\":\"2026-07-17T07:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"00000000-0000-4000-8000-000000000011\",\"timestamp\":\"2026-07-17T07:00:00Z\",\"cwd\":\"/root\",\"source\":\"cli\"}}\n",
+                "{\"timestamp\":\"2026-07-17T07:01:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"root-turn\"}}\n",
+                "{\"timestamp\":\"2026-07-17T07:02:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"root-turn\"}}\n"
+            ),
+        )
+        .unwrap();
+        fs::write(
+            sessions.join("child.jsonl"),
+            concat!(
+                "{\"timestamp\":\"2026-07-17T07:01:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"00000000-0000-4000-8000-000000000012\",\"timestamp\":\"2026-07-17T07:01:00Z\",\"cwd\":\"/child\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"00000000-0000-4000-8000-000000000011\"}}}}}\n",
+                "{\"timestamp\":\"2026-07-17T07:03:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"child-turn\"}}\n"
+            ),
+        )
+        .unwrap();
+        let database = codex_home.join("state_5.sqlite");
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO threads (id, title) VALUES (?1, ?2)",
+                ["00000000-0000-4000-8000-000000000011", "Completed root"],
+            )
+            .unwrap();
+        drop(connection);
+
+        let now_ms = chrono::DateTime::parse_from_rfc3339("2026-07-17T08:04:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let mut cache = ScanCache::default();
+        let result = scan_active_sessions_with_cache(codex_home, now_ms, &mut cache).unwrap();
+
+        assert!(result.sessions.is_empty());
     }
 
     #[test]
