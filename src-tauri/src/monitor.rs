@@ -286,6 +286,7 @@ pub fn scan_active_sessions_with_cache(
     let sidebar_titles = lookup_thread_names(codex_home, &thread_ids);
 
     for transcript in transcripts {
+        let last_observed_at_ms = transcript.last_observed_at_ms;
         let mut meta = transcript.meta;
         if let Some(title) = sidebar_titles
             .get(&meta.thread_id)
@@ -304,6 +305,9 @@ pub fn scan_active_sessions_with_cache(
         for message in transcript.user_messages {
             registry.apply_user_message(&thread_id, message);
         }
+        if let Some(last_observed_at_ms) = last_observed_at_ms {
+            registry.apply_runtime_activity(&thread_id, last_observed_at_ms);
+        }
     }
     registry.mark_stale(now_ms);
 
@@ -321,7 +325,7 @@ mod tests {
     use crate::codex::discovery::ScanCache;
 
     #[test]
-    fn returns_one_titled_root_when_only_its_descendant_is_active() {
+    fn retains_a_descendant_with_recent_runtime_activity() {
         let temp = tempfile::tempdir().unwrap();
         let codex_home = temp.path();
         let sessions = codex_home.join("sessions/2026/07/17");
@@ -340,7 +344,8 @@ mod tests {
             sessions.join("child.jsonl"),
             concat!(
                 "{\"timestamp\":\"2026-07-17T07:01:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"00000000-0000-4000-8000-000000000002\",\"timestamp\":\"2026-07-17T07:01:00Z\",\"cwd\":\"/child\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"00000000-0000-4000-8000-000000000001\"}}}}}\n",
-                "{\"timestamp\":\"2026-07-17T07:03:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"child-turn\"}}\n"
+                "{\"timestamp\":\"2026-07-17T07:03:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"child-turn\"}}\n",
+                "{\"timestamp\":\"2026-07-17T08:03:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"Still working\"}}\n"
             ),
         )
         .unwrap();
@@ -361,8 +366,10 @@ mod tests {
         drop(connection);
 
         let mut cache = ScanCache::default();
-        let result =
-            scan_active_sessions_with_cache(codex_home, 1_784_272_200_000, &mut cache).unwrap();
+        let now_ms = chrono::DateTime::parse_from_rfc3339("2026-07-17T08:04:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let result = scan_active_sessions_with_cache(codex_home, now_ms, &mut cache).unwrap();
         assert_eq!(result.sessions.len(), 1);
         assert_eq!(
             result.sessions[0].thread_id,

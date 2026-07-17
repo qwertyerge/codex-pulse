@@ -24,6 +24,7 @@ pub struct ParsedTranscript {
     pub recent_events: Vec<RecentEvent>,
     pub user_messages: Vec<UserMessage>,
     pub weekly_quota: Option<WeeklyQuota>,
+    pub last_observed_at_ms: Option<i64>,
 }
 
 #[derive(Default)]
@@ -33,6 +34,7 @@ struct TranscriptAccumulator {
     recent_event: Option<RecentEvent>,
     user_message: Option<UserMessage>,
     weekly_quota: Option<WeeklyQuota>,
+    last_observed_at_ms: Option<i64>,
 }
 
 impl TranscriptAccumulator {
@@ -49,16 +51,30 @@ impl TranscriptAccumulator {
             // later in the file. The first metadata record identifies the
             // transcript itself; subsequent records are context, not a new
             // lifecycle owner.
-            Ok(Some(ParsedRecord::Meta(record))) if self.meta.is_none() => self.meta = Some(record),
+            Ok(Some(ParsedRecord::Meta(record))) if self.meta.is_none() => {
+                self.record_observation(record.session_created_at_ms);
+                self.meta = Some(record);
+            }
             Ok(Some(ParsedRecord::Meta(_))) => {}
-            Ok(Some(ParsedRecord::Lifecycle(record))) => self.push_lifecycle(record),
+            Ok(Some(ParsedRecord::Lifecycle(record))) => {
+                self.record_observation(record.occurred_at_ms);
+                self.push_lifecycle(record);
+            }
             Ok(Some(ParsedRecord::LifecycleAndRecent(lifecycle, recent))) => {
+                self.record_observation(lifecycle.occurred_at_ms);
                 self.push_lifecycle(lifecycle);
                 self.record_recent(recent);
             }
-            Ok(Some(ParsedRecord::Recent(record))) => self.record_recent(record),
-            Ok(Some(ParsedRecord::UserMessage(record))) => self.record_user_message(record),
+            Ok(Some(ParsedRecord::Recent(record))) => {
+                self.record_observation(record.occurred_at_ms);
+                self.record_recent(record);
+            }
+            Ok(Some(ParsedRecord::UserMessage(record))) => {
+                self.record_observation(record.occurred_at_ms);
+                self.record_user_message(record);
+            }
             Ok(Some(ParsedRecord::WeeklyQuota(candidate))) => {
+                self.record_observation(candidate.observed_at_ms);
                 if self
                     .weekly_quota
                     .as_ref()
@@ -98,6 +114,15 @@ impl TranscriptAccumulator {
         }
     }
 
+    fn record_observation(&mut self, occurred_at_ms: i64) {
+        if self
+            .last_observed_at_ms
+            .is_none_or(|current| occurred_at_ms >= current)
+        {
+            self.last_observed_at_ms = Some(occurred_at_ms);
+        }
+    }
+
     fn snapshot(&self) -> Option<ParsedTranscript> {
         let meta = self.meta.clone()?;
         let events = self
@@ -112,6 +137,7 @@ impl TranscriptAccumulator {
             recent_events: self.recent_event.iter().cloned().collect(),
             user_messages: self.user_message.iter().cloned().collect(),
             weekly_quota: self.weekly_quota.clone(),
+            last_observed_at_ms: self.last_observed_at_ms,
         })
     }
 }

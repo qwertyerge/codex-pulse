@@ -139,6 +139,15 @@ impl SessionRegistry {
         }
     }
 
+    pub fn apply_runtime_activity(&mut self, thread_id: &str, occurred_at_ms: i64) {
+        let Some(node) = self.nodes.get_mut(thread_id) else {
+            return;
+        };
+        if node.phase == Phase::Active && occurred_at_ms >= node.last_activity_at_ms {
+            node.last_activity_at_ms = occurred_at_ms;
+        }
+    }
+
     pub fn mark_stale(&mut self, now_ms: i64) {
         for node in self.nodes.values_mut() {
             if node.phase == Phase::Active && now_ms - node.last_activity_at_ms >= STALE_AFTER_MS {
