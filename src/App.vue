@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import EmptyState from "./components/EmptyState.vue";
 import FooterStatus from "./components/FooterStatus.vue";
@@ -12,6 +12,7 @@ import { usePulse } from "./composables/usePulse";
 import { useMonotonicClock } from "./composables/useMonotonicClock";
 import { useTheme } from "./composables/useTheme";
 import { useLocale } from "./composables/useLocale";
+import { useFooterInitialization } from "./composables/useFooterInitialization";
 import type { InitializationEvent } from "./types";
 
 const pulse = usePulse();
@@ -20,33 +21,13 @@ const clock = useMonotonicClock();
 let refresh: ReturnType<typeof setInterval> | undefined;
 let unlisten: UnlistenFn | undefined;
 let unlistenInitialization: UnlistenFn | undefined;
-let backgroundInitializationHideTimer: ReturnType<typeof setTimeout> | undefined;
-let displayedBackgroundInitializationRun = -1;
-let terminalBackgroundInitializationRun = -1;
 const theme = useTheme(computed(() => pulse.snapshot.value.theme));
 const stopLocale = useLocale(computed(() => pulse.snapshot.value.locale));
-const initialScreenFinished = ref(false);
-const showBackgroundInitialization = ref(false);
-
-watch(() => pulse.snapshot.value.initialization, (initialization) => {
-  if (!initialization.events.length) return;
-  const isTerminal = initialization.phase === "complete" || initialization.phase === "failed";
-  if (initialization.runId === 1) {
-    if (isTerminal) initialScreenFinished.value = true;
-    return;
-  }
-  if (!initialScreenFinished.value) return;
-  if (initialization.runId !== displayedBackgroundInitializationRun) {
-    displayedBackgroundInitializationRun = initialization.runId;
-    terminalBackgroundInitializationRun = -1;
-    if (backgroundInitializationHideTimer) clearTimeout(backgroundInitializationHideTimer);
-    showBackgroundInitialization.value = true;
-  }
-  if (showBackgroundInitialization.value && isTerminal && terminalBackgroundInitializationRun !== initialization.runId) {
-    terminalBackgroundInitializationRun = initialization.runId;
-    backgroundInitializationHideTimer = setTimeout(() => { showBackgroundInitialization.value = false; }, 2_200);
-  }
-}, { deep: true });
+const {
+  visible: showBackgroundInitialization,
+  initialization: footerInitialization,
+  stop: stopFooterInitialization
+} = useFooterInitialization(computed(() => pulse.snapshot.value.initialization));
 
 onMounted(async () => {
   await pulse.load();
@@ -62,11 +43,11 @@ onMounted(async () => {
 onUnmounted(() => {
   clock.stop();
   if (refresh) clearInterval(refresh);
-  if (backgroundInitializationHideTimer) clearTimeout(backgroundInitializationHideTimer);
   unlisten?.();
   unlistenInitialization?.();
   theme.stop();
   stopLocale();
+  stopFooterInitialization();
 });
 </script>
 
@@ -106,8 +87,8 @@ onUnmounted(() => {
     <div class="footer-stack" :class="{ 'footer-stack--with-event': showBackgroundInitialization }">
       <Transition name="footer-status">
         <InitializationStatusRow
-          v-if="showBackgroundInitialization"
-          :initialization="pulse.snapshot.value.initialization"
+          v-if="showBackgroundInitialization && footerInitialization"
+          :initialization="footerInitialization"
         />
       </Transition>
       <FooterStatus

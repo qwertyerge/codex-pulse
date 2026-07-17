@@ -310,6 +310,7 @@
 - `footer-stack--with-event` is present exactly while `showBackgroundInitialization` is true.
 - The WebView refresh interval is `60_000` milliseconds.
 - `footer-status-enter-*` and `footer-status-leave-*` animate only the one-line event; the footer surface animates `max-height` from 48px to 72px with bottom anchoring.
+- Consecutive background phases debounce for `600` milliseconds and render only the complete or failed terminal event unless a nonterminal phase stalls.
 
 - [ ] **Step 1: Write failing tests for cadence and animated state**
 
@@ -330,6 +331,11 @@
     expect(stylesheet).toContain(".session-list__end");
     expect(stylesheet).not.toContain('content: "END"');
   });
+
+  it("shows only the terminal event for a continuous background refresh", async () => {
+    // Use fake timers to emit two nonterminal phases within 600 ms, then Complete.
+    // Assert no intermediate row is visible and Complete is shown immediately.
+  });
   ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -340,11 +346,11 @@
   pnpm test -- src/__tests__/App.spec.ts src/__tests__/footerLayout.spec.ts
   ```
 
-  Expected: the source still uses a 2-second frontend fallback and lacks stretch-transition selectors.
+  Expected: the test fails because the source still uses a 2-second frontend fallback and lacks stretch-transition selectors.
 
 - [ ] **Step 3: Implement bottom-anchored stretch motion**
 
-  Change App's snapshot interval to 60 seconds. Apply the state class and transition wrapper:
+  Change App's snapshot interval to 60 seconds. Move footer-event visibility into a dedicated composable so it can debounce intermediate initialization phases by 600 ms, expose stalled progress, show terminal events immediately, and retain the existing 2.2-second terminal hide delay. Apply the state class and transition wrapper:
 
   ```vue
   <div class="footer-stack" :class="{ 'footer-stack--with-event': showBackgroundInitialization }">
@@ -419,3 +425,16 @@
   ```
 
   Expected: the worktree is clean.
+
+## Execution evidence — 2026-07-17
+
+All five tasks were executed with red-green tests before their implementation.
+The completed verification set is: Rust format check; 47 native tests; 45
+frontend assertions; production frontend build; debug native bundle and
+installed-app executable hash comparison. Native interaction confirmed System,
+Chinese, English, French, and German UI states; a 520-point resize followed by
+scrolling to the list end kept the final card and localized end separator clear
+of the animated floating footer. The 600-millisecond footer debounce was
+verified with fake timers and a fresh live refresh: intermediate phases remain
+out of the footer, the terminal status appears, and it hides after a quiet
+interval.
