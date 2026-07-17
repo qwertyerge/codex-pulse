@@ -1,80 +1,76 @@
 import { ref, watch, type Ref } from "vue";
 import type { InitializationSnapshot } from "../types";
 
-export const FOOTER_STATUS_THROTTLE_MS = 600;
-export const FOOTER_STATUS_HIDE_MS = 2_200;
+export const FOOTER_STATUS_THROTTLE_MS = 2_000;
+export const FOOTER_STATUS_HIDE_MS = 2_000;
 
 export function useFooterInitialization(source: Readonly<Ref<InitializationSnapshot>>) {
   const visible = ref(false);
   const initialization = ref<InitializationSnapshot>();
   let initialScreenFinished = false;
-  let activeRunId = -1;
   let displayTimer: ReturnType<typeof setTimeout> | undefined;
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
+  let displayEpoch = 0;
+  let hideEpoch = 0;
 
   function clearDisplayTimer() {
+    displayEpoch += 1;
     if (!displayTimer) return;
     clearTimeout(displayTimer);
     displayTimer = undefined;
   }
 
   function clearHideTimer() {
+    hideEpoch += 1;
     if (!hideTimer) return;
     clearTimeout(hideTimer);
     hideTimer = undefined;
   }
 
-  function show(snapshot: InitializationSnapshot) {
-    initialization.value = snapshot;
-    visible.value = true;
+  function isTerminal(snapshot: InitializationSnapshot) {
+    return snapshot.phase === "complete" || snapshot.phase === "failed";
   }
 
-  function scheduleStatus(snapshot: InitializationSnapshot, terminal: boolean) {
+  function scheduleStatus(snapshot: InitializationSnapshot) {
     clearDisplayTimer();
-    clearHideTimer();
-    visible.value = false;
-    initialization.value = undefined;
+    const epoch = displayEpoch;
     displayTimer = setTimeout(() => {
-      show(snapshot);
-      if (terminal) scheduleHide(snapshot.runId);
+      if (epoch !== displayEpoch) return;
       displayTimer = undefined;
+      initialization.value = snapshot;
+      visible.value = true;
+      if (isTerminal(snapshot)) scheduleHide();
     }, FOOTER_STATUS_THROTTLE_MS);
   }
 
-  function scheduleHide(runId: number) {
+  function scheduleHide() {
     clearHideTimer();
+    const epoch = hideEpoch;
     hideTimer = setTimeout(() => {
-      if (activeRunId === runId) {
-        visible.value = false;
-        initialization.value = undefined;
-      }
+      if (epoch !== hideEpoch) return;
       hideTimer = undefined;
+      visible.value = false;
+      initialization.value = undefined;
     }, FOOTER_STATUS_HIDE_MS);
   }
 
   const stopWatching = watch(source, (snapshot) => {
     if (!snapshot.events.length) return;
-    const terminal = snapshot.phase === "complete" || snapshot.phase === "failed";
     if (snapshot.runId === 1) {
-      if (terminal) initialScreenFinished = true;
+      if (isTerminal(snapshot)) initialScreenFinished = true;
       return;
     }
     if (!initialScreenFinished) return;
 
-    if (snapshot.runId !== activeRunId) {
-      activeRunId = snapshot.runId;
+    if (visible.value) {
       clearDisplayTimer();
       clearHideTimer();
-      visible.value = false;
-      initialization.value = undefined;
-    }
-
-    if (terminal) {
-      scheduleStatus(snapshot, true);
+      initialization.value = snapshot;
+      if (isTerminal(snapshot)) scheduleHide();
       return;
     }
 
-    scheduleStatus(snapshot, false);
+    scheduleStatus(snapshot);
   }, { deep: true, immediate: true });
 
   return {
