@@ -411,6 +411,30 @@ pub fn open_thread(thread_id: String, app: tauri::AppHandle) -> Result<(), Strin
         .map_err(|error| error.to_string())
 }
 
+fn validate_project_path(path: &str) -> Result<PathBuf, String> {
+    if path.trim().is_empty() {
+        return Err("Project path is empty".into());
+    }
+    let path = PathBuf::from(path);
+    let metadata = std::fs::metadata(&path)
+        .map_err(|error| format!("Could not access project path {}: {error}", path.display()))?;
+    if !metadata.is_dir() {
+        return Err(format!(
+            "Project path is not a directory: {}",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+pub fn open_project_path(path: String, app: tauri::AppHandle) -> Result<(), String> {
+    let path = validate_project_path(&path)?;
+    app.opener()
+        .open_path(path.to_string_lossy().into_owned(), None::<String>)
+        .map_err(|error| error.to_string())
+}
+
 fn validate_external_url(value: &str) -> Result<(), String> {
     let parsed =
         url::Url::parse(value).map_err(|error| format!("Invalid external URL: {error}"))?;
@@ -438,7 +462,7 @@ mod tests {
 
     use super::{
         coalesce_recent_events, set_always_on_top_config, set_locale_config, validate_external_url,
-        AppState, FALLBACK_RECONCILIATION_SECONDS,
+        validate_project_path, AppState, FALLBACK_RECONCILIATION_SECONDS,
     };
     use crate::config::ConfigStore;
     use crate::model::{LocaleMode, RecentEvent, RecentEventPriority, SessionSnapshot};
@@ -519,6 +543,26 @@ mod tests {
         ] {
             assert!(validate_external_url(url).is_err());
         }
+    }
+
+    #[test]
+    fn validates_project_directories_before_opening() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("notes.txt");
+        std::fs::write(&file, "not a directory").unwrap();
+        let missing = temp.path().join("missing");
+
+        assert_eq!(
+            validate_project_path(temp.path().to_str().unwrap()).unwrap(),
+            temp.path()
+        );
+        assert!(validate_project_path("   ").unwrap_err().contains("empty"));
+        assert!(validate_project_path(missing.to_str().unwrap())
+            .unwrap_err()
+            .contains("Could not access project path"));
+        assert!(validate_project_path(file.to_str().unwrap())
+            .unwrap_err()
+            .contains("not a directory"));
     }
 
     #[test]

@@ -28,6 +28,7 @@ pub fn run() -> anyhow::Result<()> {
             crate::commands::set_locale,
             crate::commands::enable_monitoring,
             crate::commands::open_thread,
+            crate::commands::open_project_path,
             crate::commands::open_external_url
         ])
         .run(tauri::generate_context!())
