@@ -1,13 +1,11 @@
 import { ref } from "vue";
 
 export function useMonotonicClock() {
-  const initialWallTime = Date.now();
-  const initialMonotonicTime = performance.now();
-  const nowMs = ref(initialWallTime);
+  const nowMs = ref(Date.now());
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const update = () => {
-    nowMs.value = initialWallTime + performance.now() - initialMonotonicTime;
+    nowMs.value = Math.max(nowMs.value, Date.now());
     const delay = 1_000 - (Math.floor(nowMs.value) % 1_000);
     timer = setTimeout(update, Math.max(1, delay));
   };
