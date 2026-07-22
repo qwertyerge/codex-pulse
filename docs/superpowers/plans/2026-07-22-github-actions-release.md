@@ -17,12 +17,31 @@
 - Use the exact current action majors approved in the design: `actions/checkout@v7`, `actions/setup-node@v7`, `pnpm/action-setup@v6`, `dtolnay/rust-toolchain@stable`, `Swatinem/rust-cache@v2`, and `tauri-apps/tauri-action@v1`.
 - Treat GitHub-hosted execution as the source of truth. Local YAML tests prove the repository contract, not runner availability or release success.
 
+## Review Amendments
+
+The first pull-request review tightened this plan without changing its release
+scope:
+
+- Add `yaml@2.9.0` as a development dependency and parse both workflows in the
+  Vitest contract. Structural assertions supersede the Task 1 whole-file
+  substring example: triggers, permissions, runners, checkout configuration,
+  commands, and release inputs must be asserted inside their owning workflow
+  job.
+- Set `persist-credentials: false` on every checkout. The release ancestry check
+  must authenticate its one fetch through an ephemeral `GITHUB_TOKEN` HTTP
+  header and must update `refs/remotes/origin/main` explicitly.
+- Treat stable major action tags as a deliberate mutable trust boundary. They
+  stay on supported action lines but can resolve new code; immutable SHA pinning
+  remains out of scope.
+
 ---
 
 ### Task 1: Add failing workflow contract tests
 
 **Files:**
 - Create: `src/__tests__/githubWorkflows.spec.ts`
+- Modify: `package.json`
+- Modify: `pnpm-lock.yaml`
 - Test: `src/__tests__/githubWorkflows.spec.ts`
 
 - [ ] **Step 1: Create a static workflow contract test**
@@ -116,6 +135,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Install pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -139,6 +160,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Rust build
@@ -193,9 +216,12 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate release source
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           app_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
           expected_tag="app-v${app_version}"
@@ -205,7 +231,9 @@ jobs:
             exit 1
           fi
 
-          git fetch --no-tags origin main
+          authorization="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $authorization" \
+            fetch --no-tags origin main:refs/remotes/origin/main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
             echo "Tagged commit $GITHUB_SHA is not contained in origin/main" >&2
             exit 1
@@ -281,13 +309,13 @@ Inspect:
 
 ```bash
 git status --short
-git diff -- .github/workflows/ci.yml .github/workflows/release.yml src/__tests__/githubWorkflows.spec.ts
+git diff -- .github/workflows/ci.yml .github/workflows/release.yml src/__tests__/githubWorkflows.spec.ts package.json pnpm-lock.yaml
 ```
 
 Commit only the workflow and workflow-test files:
 
 ```bash
-git add .github/workflows/ci.yml .github/workflows/release.yml src/__tests__/githubWorkflows.spec.ts
+git add .github/workflows/ci.yml .github/workflows/release.yml src/__tests__/githubWorkflows.spec.ts package.json pnpm-lock.yaml
 git commit -m "ci: add validation and draft release workflows"
 ```
 
@@ -460,4 +488,3 @@ Report through AskHuman:
 - explicit caveat that the artifact is ad-hoc signed, not Developer ID signed, and not notarized
 
 Leave the release in draft state and do not publish it.
-

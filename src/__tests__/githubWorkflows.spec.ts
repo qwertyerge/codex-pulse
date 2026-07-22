@@ -1,41 +1,152 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
+
+interface WorkflowStep {
+  name?: string;
+  uses?: string;
+  run?: string;
+  env?: Record<string, string>;
+  with?: Record<string, unknown>;
+}
+
+interface WorkflowJob {
+  name: string;
+  "runs-on": string;
+  steps: WorkflowStep[];
+}
+
+interface Workflow {
+  name: string;
+  on: Record<string, { branches?: string[]; tags?: string[] }>;
+  permissions: Record<string, string>;
+  jobs: Record<string, WorkflowJob>;
+}
 
 function readWorkflow(name: string) {
   const path = resolve(process.cwd(), ".github/workflows", name);
   expect(existsSync(path), `${name} should exist`).toBe(true);
-  return readFileSync(path, "utf8");
+  return parse(readFileSync(path, "utf8")) as Workflow;
+}
+
+function stepUsing(job: WorkflowJob, action: string) {
+  const step = job.steps.find((candidate) => candidate.uses === action);
+  expect(step, `${job.name} should use ${action}`).toBeDefined();
+  return step!;
+}
+
+function stepNamed(job: WorkflowJob, name: string) {
+  const step = job.steps.find((candidate) => candidate.name === name);
+  expect(step, `${job.name} should contain ${name}`).toBeDefined();
+  return step!;
 }
 
 describe("GitHub workflows", () => {
   it("validates frontend and Rust changes on pull requests and main", () => {
     const workflow = readWorkflow("ci.yml");
 
-    expect(workflow).toContain("name: CI");
-    expect(workflow).toContain("pull_request:");
-    expect(workflow).toContain("push:");
-    expect(workflow).toContain("branches: [main]");
-    expect(workflow).toContain("permissions:\n  contents: read");
-    expect(workflow).toContain("name: Frontend");
-    expect(workflow).toContain("runs-on: ubuntu-latest");
-    expect(workflow).toContain("name: Rust");
-    expect(workflow).toContain("runs-on: macos-15");
-    expect(workflow).toContain("pnpm test");
-    expect(workflow).toContain("pnpm build");
-    expect(workflow).toContain("cargo test --manifest-path src-tauri/Cargo.toml");
+    expect(workflow.name).toBe("CI");
+    expect(workflow.on).toEqual({
+      pull_request: { branches: ["main"] },
+      push: { branches: ["main"] },
+    });
+    expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(Object.keys(workflow.jobs)).toEqual(["frontend", "rust"]);
+
+    const frontend = workflow.jobs.frontend;
+    expect(frontend.name).toBe("Frontend");
+    expect(frontend["runs-on"]).toBe("ubuntu-latest");
+    expect(stepUsing(frontend, "actions/checkout@v7").with).toEqual({
+      "persist-credentials": false,
+    });
+    expect(stepUsing(frontend, "pnpm/action-setup@v6").with).toEqual({
+      version: "10.33.0",
+    });
+    expect(stepUsing(frontend, "actions/setup-node@v7").with).toMatchObject({
+      "node-version": 24,
+      cache: "pnpm",
+    });
+    expect(frontend.steps.map((step) => step.run).filter(Boolean)).toEqual([
+      "pnpm install --frozen-lockfile",
+      "pnpm test",
+      "pnpm build",
+    ]);
+
+    const rust = workflow.jobs.rust;
+    expect(rust.name).toBe("Rust");
+    expect(rust["runs-on"]).toBe("macos-15");
+    expect(stepUsing(rust, "actions/checkout@v7").with).toEqual({
+      "persist-credentials": false,
+    });
+    stepUsing(rust, "dtolnay/rust-toolchain@stable");
+    stepUsing(rust, "Swatinem/rust-cache@v2");
+    expect(rust.steps.map((step) => step.run).filter(Boolean)).toEqual([
+      "cargo test --manifest-path src-tauri/Cargo.toml",
+    ]);
   });
 
   it("creates only a guarded ARM64 draft release from an app version tag", () => {
     const workflow = readWorkflow("release.yml");
 
-    expect(workflow).toContain('      - "app-v*"');
-    expect(workflow).toContain("permissions:\n  contents: write");
-    expect(workflow).toContain('expected_tag="app-v${app_version}"');
-    expect(workflow).toContain('git merge-base --is-ancestor "$GITHUB_SHA" origin/main');
-    expect(workflow).toContain('APPLE_SIGNING_IDENTITY: "-"');
-    expect(workflow).toContain("releaseDraft: true");
-    expect(workflow).toContain("uploadUpdaterJson: false");
-    expect(workflow).toContain('args: "--target aarch64-apple-darwin --bundles dmg"');
+    expect(workflow.name).toBe("Release");
+    expect(workflow.on).toEqual({ push: { tags: ["app-v*"] } });
+    expect(workflow.permissions).toEqual({ contents: "write" });
+    expect(Object.keys(workflow.jobs)).toEqual(["release"]);
+
+    const release = workflow.jobs.release;
+    expect(release.name).toBe("Release");
+    expect(release["runs-on"]).toBe("macos-15");
+    expect(stepUsing(release, "actions/checkout@v7").with).toEqual({
+      "fetch-depth": 0,
+      "persist-credentials": false,
+    });
+
+    const validation = stepNamed(release, "Validate release source");
+    expect(validation.env).toEqual({
+      GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
+    });
+    expect(validation.run).toContain('expected_tag="app-v${app_version}"');
+    expect(validation.run).toContain("AUTHORIZATION: basic $authorization");
+    expect(validation.run).toContain(
+      "fetch --no-tags origin main:refs/remotes/origin/main",
+    );
+    expect(validation.run).toContain(
+      'git merge-base --is-ancestor "$GITHUB_SHA" origin/main',
+    );
+
+    expect(stepUsing(release, "pnpm/action-setup@v6").with).toEqual({
+      version: "10.33.0",
+    });
+    expect(stepUsing(release, "actions/setup-node@v7").with).toMatchObject({
+      "node-version": 24,
+      cache: "pnpm",
+    });
+    expect(stepUsing(release, "dtolnay/rust-toolchain@stable").with).toEqual({
+      targets: "aarch64-apple-darwin",
+    });
+    stepUsing(release, "Swatinem/rust-cache@v2");
+    expect(release.steps.map((step) => step.run).filter(Boolean)).toEqual(
+      expect.arrayContaining([
+        "pnpm install --frozen-lockfile",
+        "pnpm test",
+        "cargo test --manifest-path src-tauri/Cargo.toml",
+      ]),
+    );
+
+    const build = stepUsing(release, "tauri-apps/tauri-action@v1");
+    expect(build.env).toEqual({
+      GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
+      APPLE_SIGNING_IDENTITY: "-",
+    });
+    expect(build.with).toMatchObject({
+      tagName: "${{ github.ref_name }}",
+      releaseCommitish: "${{ github.sha }}",
+      generateReleaseNotes: true,
+      releaseDraft: true,
+      prerelease: false,
+      uploadUpdaterJson: false,
+      args: "--target aarch64-apple-darwin --bundles dmg",
+    });
   });
 });

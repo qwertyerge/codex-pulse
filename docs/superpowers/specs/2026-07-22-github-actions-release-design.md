@@ -88,8 +88,10 @@ Use current stable major tags:
 - `tauri-apps/tauri-action@v1`
 
 The repository currently permits all public actions and does not require SHA
-pinning. Major tags keep the workflow on the supported line while avoiding
-unreviewed source changes from a floating default branch.
+pinning. Major tags keep the workflow on the supported line, but they are a
+deliberate mutable trust boundary: a tag can resolve newer action code without a
+repository change. Pinning actions to immutable commit SHAs remains out of scope
+for this release setup.
 
 ## Branch Protection
 
