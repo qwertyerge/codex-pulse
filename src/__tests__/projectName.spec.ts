@@ -8,7 +8,7 @@ describe("projectName", () => {
     ["C:\\workspace\\codex-pulse", "codex-pulse"],
     ["C:\\workspace\\codex-pulse\\", "codex-pulse"],
     ["/", "/"],
-    ["C:\\", "C:"]
+    ["C:\\", "C:\\"]
   ])("derives the display label from %s", (cwd, expected) => {
     expect(projectName(cwd)).toBe(expected);
   });
