@@ -6,7 +6,7 @@ import { i18n } from "../i18n";
 describe("SessionCard", () => {
   beforeEach(() => { i18n.global.locale.value = "en"; });
 
-  it("shows title, complete path tooltip, and both timers", () => {
+  it("shows title, project link, and both timers", async () => {
     const wrapper = mount(SessionCard, {
       props: {
         session: {
@@ -26,8 +26,14 @@ describe("SessionCard", () => {
     expect(wrapper.text()).toContain("01:00");
     expect(wrapper.text()).toContain("Session age");
     expect(wrapper.text()).toContain("02:00");
-    expect(wrapper.get(".session-card__path").attributes("title")).toBe("/workspace/project");
+    const projectLink = wrapper.get("a.session-card__path");
+    expect(projectLink.text()).toBe("project");
+    expect(projectLink.attributes("title")).toBe("/workspace/project");
     expect(wrapper.get("button").attributes("aria-label")).toContain("Open Codex task");
+
+    await projectLink.trigger("click");
+    expect(wrapper.emitted("open-project")).toEqual([["/workspace/project"]]);
+    expect(wrapper.emitted("open")).toBeUndefined();
   });
 
   it("shows only the latest meaningful event below the timers", () => {

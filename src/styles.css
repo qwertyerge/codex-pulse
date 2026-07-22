@@ -60,7 +60,7 @@ button { font: inherit; }
 .top-bar__locale-menu button[aria-checked="true"] { color: #fff; background: #3478f6; box-shadow: 0 1px 4px rgba(38, 89, 185, 0.28); }
 .top-bar button:hover { background: rgba(255, 255, 255, 0.78); }
 .top-bar button:active { transform: scale(0.97); }
-.top-bar button:focus-visible, .session-card button:focus-visible { outline: 3px solid rgba(52, 120, 246, 0.55); outline-offset: 2px; }
+.top-bar button:focus-visible, .session-card button:focus-visible, .session-card__path:focus-visible { outline: 3px solid rgba(52, 120, 246, 0.55); outline-offset: 2px; }
 
 .monitoring-banner, .pulse-shell__error {
   flex: 0 0 auto;
@@ -114,7 +114,8 @@ button { font: inherit; }
 .session-card__open:hover { color: #3478f6; }
 .session-card__open-icon { width: 15px; height: 15px; flex: 0 0 15px; fill: none; stroke: #657086; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.65; }
 .session-card__open:hover .session-card__open-icon { stroke: currentColor; }
-.session-card__path { display: block; overflow: hidden; margin-top: 5px; color: #687287; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.session-card__path { display: block; width: fit-content; max-width: 100%; overflow: hidden; margin-top: 5px; color: #2467cc; font-size: 12px; text-decoration-line: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; text-overflow: ellipsis; white-space: nowrap; }
+.session-card__path:hover { color: #174fa6; }
 .session-card__timers { width: 100%; min-width: 0; gap: 6px; margin-top: 10px; }
 .session-card__timer { min-width: 0; overflow: hidden; flex: 1 1 0; padding: 7px 8px; border-radius: 8px; background: rgba(205, 216, 237, 0.32); }
 .session-card__timer small, .session-card__timer strong { display: block; }
@@ -222,7 +223,9 @@ button { font: inherit; }
 
 :root[data-theme="dark"] { color: #f1f5fc; }
 :root[data-theme="dark"] .pulse-shell { background: color-mix(in srgb, #101828 64%, transparent); }
-:root[data-theme="dark"] .top-bar__count, :root[data-theme="dark"] .session-card__path { color: #a9b4c8; }
+:root[data-theme="dark"] .top-bar__count { color: #a9b4c8; }
+:root[data-theme="dark"] .session-card__path { color: #8ac2ff; }
+:root[data-theme="dark"] .session-card__path:hover { color: #b9ddff; }
 :root[data-theme="dark"] .top-bar__theme-group { border-color: rgba(218, 230, 255, 0.16); background: rgba(13, 23, 41, 0.32); }
 :root[data-theme="dark"] .top-bar__locale-menu { border-color: rgba(218, 230, 255, 0.16); background: rgba(19, 30, 49, 0.76); box-shadow: 0 10px 28px rgba(2, 7, 17, 0.34); }
 :root[data-theme="dark"] .top-bar__locale-menu button { color: #d8e4f7; }
