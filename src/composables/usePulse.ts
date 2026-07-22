@@ -49,6 +49,15 @@ export function usePulse() {
     }
   }
 
+  async function openProjectPath(path: string) {
+    try {
+      error.value = undefined;
+      await invoke("open_project_path", { path });
+    } catch (reason) {
+      error.value = reason instanceof Error ? reason.message : String(reason);
+    }
+  }
+
   async function enableMonitoring() {
     error.value = undefined;
     try {
@@ -100,5 +109,5 @@ export function usePulse() {
     }
   }
 
-  return { snapshot, error, load, togglePin, openThread, enableMonitoring, mergeInitializationEvent, setTheme, setLocale };
+  return { snapshot, error, load, togglePin, openThread, openProjectPath, enableMonitoring, mergeInitializationEvent, setTheme, setLocale };
 }

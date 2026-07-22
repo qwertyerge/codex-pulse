@@ -15,6 +15,11 @@ describe("App", () => {
     expect(readFileSync(resolve(process.cwd(), "src/App.vue"), "utf8")).toContain("setInterval(() => { void pulse.load(); }, 60_000)");
   });
 
+  it("routes project-link events to the project path command", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/App.vue"), "utf8");
+    expect(source).toContain('@open-project="pulse.openProjectPath"');
+  });
+
   it("renders the product name", () => {
     const wrapper = mount(App, { global: { plugins: [i18n] } });
     expect(wrapper.text()).toContain("Codex Pulse");

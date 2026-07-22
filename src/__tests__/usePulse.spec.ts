@@ -69,6 +69,27 @@ describe("usePulse", () => {
     });
   });
 
+  it("opens a project through the validated native path command", async () => {
+    const pulse = usePulse();
+    invoke.mockResolvedValueOnce(undefined);
+
+    await pulse.openProjectPath("/workspace/codex-pulse");
+
+    expect(invoke).toHaveBeenCalledWith("open_project_path", {
+      path: "/workspace/codex-pulse"
+    });
+    expect(pulse.error.value).toBeUndefined();
+  });
+
+  it("surfaces a native project-open failure", async () => {
+    const pulse = usePulse();
+    invoke.mockRejectedValueOnce(new Error("Project path is not a directory"));
+
+    await pulse.openProjectPath("/workspace/file.txt");
+
+    expect(pulse.error.value).toBe("Project path is not a directory");
+  });
+
   it("persists an explicit theme and updates the local snapshot", async () => {
     const pulse = usePulse();
     invoke.mockResolvedValueOnce("dark");

@@ -76,6 +76,7 @@ onUnmounted(() => {
         :session="session"
         :now-ms="clock.nowMs.value"
         @open="pulse.openThread"
+        @open-project="pulse.openProjectPath"
       />
       <span key="session-list-end" class="session-list__end" aria-hidden="true">{{ t("list.end") }}</span>
     </TransitionGroup>

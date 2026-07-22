@@ -3,12 +3,16 @@ import { ChevronDown, ChevronUp, ExternalLink, Pause } from "@lucide/vue";
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { formatDuration, formatRecentAgeValue } from "../lib/duration";
+import { projectName } from "../lib/projectName";
 import { measureRecentAgeWidth } from "../lib/recentAgeWidth";
 import type { RecentEvent, SessionSnapshot, UserMessage } from "../types";
 import MarkdownContent from "./MarkdownContent.vue";
 
 const props = defineProps<{ session: SessionSnapshot; nowMs: number }>();
-defineEmits<{ open: [threadId: string] }>();
+defineEmits<{
+  open: [threadId: string];
+  "open-project": [path: string];
+}>();
 const { t } = useI18n();
 
 const expanded = ref(false);
@@ -21,6 +25,7 @@ const recentAgeMeasure = ref<HTMLElement>();
 const recentAgeWidth = ref(0);
 const displayedPrompt = computed(() => promptExpanded.value ? frozenPrompt.value : props.session.lastUserMessage);
 const displayedEvent = computed(() => expanded.value ? frozenEvent.value : props.session.recentEvent);
+const displayedProjectName = computed(() => projectName(props.session.cwd));
 const currentRun = computed(() => formatDuration(props.nowMs - props.session.currentRunStartedAtMs));
 const sessionAge = computed(() => formatDuration(props.nowMs - props.session.sessionCreatedAtMs));
 const recentEventAge = computed(() => frozenRecentAge.value || (displayedEvent.value && formatRecentAgeValue(props.nowMs - displayedEvent.value.occurredAtMs)));
@@ -67,7 +72,12 @@ function togglePrompt() {
           <ExternalLink class="session-card__open-icon" aria-hidden="true" />
         </button>
       </span>
-      <span class="session-card__path" :title="session.cwd">{{ session.cwd }}</span>
+      <a
+        class="session-card__path"
+        href="#"
+        :title="session.cwd"
+        @click.prevent="$emit('open-project', session.cwd)"
+      >{{ displayedProjectName }}</a>
       <span class="session-card__timers">
         <span class="session-card__timer"><small>{{ t("session.currentRun") }}</small><strong>{{ currentRun }}</strong></span>
         <span class="session-card__timer"><small>{{ t("session.sessionAge") }}</small><strong>{{ sessionAge }}</strong></span>
