@@ -4,7 +4,7 @@
 
 **Goal:** Add reproducible pull-request validation and an Apple Silicon macOS draft-release pipeline, then prove the workflows on GitHub and protect `main` with the successful checks.
 
-**Architecture:** Keep validation and publishing in separate workflows. `ci.yml` validates frontend work on Linux and Rust/Tauri work on an Apple Silicon macOS runner. `release.yml` accepts only an exact `app-v<tauri-version>` tag whose commit is contained in `origin/main`, repeats the tests, and uses `tauri-apps/tauri-action` to build one ad-hoc-signed ARM64 DMG into a draft GitHub Release.
+**Architecture:** Keep validation and publishing in separate workflows. `ci.yml` validates frontend work on Linux and Rust/Tauri work on an Apple Silicon macOS runner. `release.yml` accepts only a strict SemVer tag equal to the Tauri version, without a leading `v`, whose commit is contained in `origin/main`; it repeats the tests and uses `tauri-apps/tauri-action` to build one ad-hoc-signed ARM64 DMG into a draft GitHub Release.
 
 **Tech Stack:** GitHub Actions, Node.js 24, pnpm 10.33.0, Vitest, Vue TypeScript build, stable Rust, Cargo, Tauri 2, GitHub CLI, GitHub GraphQL API.
 
@@ -77,12 +77,12 @@ describe("GitHub workflows", () => {
     expect(workflow).toContain("cargo test --manifest-path src-tauri/Cargo.toml");
   });
 
-  it("creates only a guarded ARM64 draft release from an app version tag", () => {
+  it("creates only a guarded ARM64 draft release from a SemVer tag", () => {
     const workflow = readWorkflow("release.yml");
 
-    expect(workflow).toContain('      - "app-v*"');
+    expect(workflow).toContain('      - "[0-9]*.[0-9]*.[0-9]*"');
     expect(workflow).toContain("permissions:\n  contents: write");
-    expect(workflow).toContain('expected_tag="app-v${app_version}"');
+    expect(workflow).toContain('expected_tag="$app_version"');
     expect(workflow).toContain('git merge-base --is-ancestor "$GITHUB_SHA" origin/main');
     expect(workflow).toContain('APPLE_SIGNING_IDENTITY: "-"');
     expect(workflow).toContain("releaseDraft: true");
@@ -198,7 +198,7 @@ name: Release
 on:
   push:
     tags:
-      - "app-v*"
+      - "[0-9]*.[0-9]*.[0-9]*"
 
 permissions:
   contents: write
@@ -224,7 +224,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           app_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
-          expected_tag="app-v${app_version}"
+          semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+
+          if [[ ! "$GITHUB_REF_NAME" =~ $semver_pattern ]]; then
+            echo "Tag $GITHUB_REF_NAME is not a strict SemVer version" >&2
+            exit 1
+          fi
+
+          expected_tag="$app_version"
 
           if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
             echo "Tag $GITHUB_REF_NAME does not match $expected_tag" >&2
@@ -271,7 +278,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: "-"
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Codex Pulse v__VERSION__"
+          releaseName: "Codex Pulse __VERSION__"
           releaseCommitish: ${{ github.sha }}
           generateReleaseNotes: true
           releaseDraft: true
@@ -417,8 +424,8 @@ Run:
 ```bash
 git fetch origin main --tags
 test "$(git show origin/main:src-tauri/tauri.conf.json | jq -r '.version')" = "0.1.0"
-test -z "$(git tag --list app-v0.1.0)"
-if gh release view app-v0.1.0 >/dev/null 2>&1; then exit 1; fi
+test -z "$(git tag --list 0.1.0)"
+if gh release view 0.1.0 >/dev/null 2>&1; then exit 1; fi
 ```
 
 If the tag or release already exists, stop and ask; do not overwrite or delete it.
@@ -428,15 +435,15 @@ If the tag or release already exists, stop and ask; do not overwrite or delete i
 Run:
 
 ```bash
-git tag -a app-v0.1.0 origin/main -m "Codex Pulse v0.1.0"
-git push origin refs/tags/app-v0.1.0
+git tag -a 0.1.0 origin/main -m "Codex Pulse 0.1.0"
+git push origin refs/tags/0.1.0
 ```
 
 This is the externally visible release trigger; do it only after the successful `main` CI and branch-protection verification.
 
 - [ ] **Step 3: Monitor the exact release workflow**
 
-Find the `Release` workflow run with event `push`, branch/tag `app-v0.1.0`, and `headSha == origin/main`, then run:
+Find the `Release` workflow run with event `push`, branch/tag `0.1.0`, and `headSha == origin/main`, then run:
 
 ```bash
 gh run watch <release-run-id> --exit-status
@@ -450,9 +457,9 @@ Expected: conclusion `success`; its only release job succeeds. On failure, inspe
 Run:
 
 ```bash
-gh release view app-v0.1.0 --json tagName,name,isDraft,isPrerelease,targetCommitish,url,assets
+gh release view 0.1.0 --json tagName,name,isDraft,isPrerelease,targetCommitish,url,assets
 release_check_dir="$(mktemp -d)"
-gh release download app-v0.1.0 --dir "$release_check_dir" --pattern '*.dmg'
+gh release download 0.1.0 --dir "$release_check_dir" --pattern '*.dmg'
 find "$release_check_dir" -maxdepth 1 -type f -name '*.dmg'
 shasum -a 256 "$release_check_dir"/*.dmg
 stat -f '%N %z bytes' "$release_check_dir"/*.dmg

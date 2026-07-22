@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - "app-v*"
+      - "[0-9]*.[0-9]*.[0-9]*"
 
 permissions:
   contents: write
@@ -29,7 +29,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           app_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
-          expected_tag="app-v${app_version}"
+          semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
+
+          if [[ ! "$GITHUB_REF_NAME" =~ $semver_pattern ]]; then
+            echo "Tag $GITHUB_REF_NAME is not a strict SemVer version" >&2
+            exit 1
+          fi
+
+          expected_tag="$app_version"
 
           if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
             echo "Tag $GITHUB_REF_NAME does not match $expected_tag" >&2
@@ -76,7 +83,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: "-"
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "Codex Pulse v__VERSION__"
+          releaseName: "Codex Pulse __VERSION__"
           releaseCommitish: ${{ github.sha }}
           generateReleaseNotes: true
           releaseDraft: true
