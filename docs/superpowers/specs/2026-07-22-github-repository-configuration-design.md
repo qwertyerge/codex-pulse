@@ -83,8 +83,9 @@ Work will occur on `codex/github-repository-config`, never directly on `main`.
 2. Validate YAML parsing, Markdown links, package metadata, frontend tests, Rust tests, and the frontend build.
 3. Commit and push the branch, then create a pull request.
 4. Apply the approved GitHub metadata and repository settings.
-5. Read the repository and community-profile APIs back to confirm the resulting state.
-6. Verify the pull-request checks and report any distinction between local validation, CI, and release distribution readiness.
+5. Wait for the required `Frontend` and `Rust` checks, then squash-merge the pull request and delete its remote branch.
+6. Read the repository and community-profile APIs from the updated default branch to confirm the resulting state.
+7. Report any distinction between local validation, CI, merged repository state, and release distribution readiness.
 
 ## Failure Handling
 
@@ -102,4 +103,4 @@ If a community-profile file is not recognized, its path and content will be chec
 - Squash is the only enabled merge method and merged branches are deleted automatically.
 - Existing `main` protection, required checks, Actions permissions, secret scanning, and push protection remain intact.
 - Frontend tests, Rust tests, frontend build, static YAML validation, and Markdown-link checks pass locally.
-- The pull request is created from `codex/github-repository-config` and its CI status is reported accurately.
+- The pull request from `codex/github-repository-config` passes both required checks and is squash-merged into `main`.
