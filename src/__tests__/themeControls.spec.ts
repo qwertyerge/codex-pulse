@@ -26,4 +26,12 @@ describe("theme control states", () => {
       .toContain("background: rgba(138, 194, 255, 0.18);");
     expect(stylesheet).not.toContain(".top-bar button:hover { background:");
   });
+
+  it("limits locale hover styling to the trigger button", () => {
+    expect(rule(".top-bar__locale > button:hover"))
+      .toContain("background: rgba(255, 255, 255, 0.78);");
+    expect(rule(':root[data-theme="dark"] .top-bar__locale > button:hover'))
+      .toContain("background: rgba(47, 65, 98, 0.72);");
+    expect(stylesheet).not.toContain(".top-bar__locale button:hover");
+  });
 });

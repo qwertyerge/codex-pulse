@@ -508,7 +508,8 @@ In the light rules of `src/styles.css`, replace the selected and generic hover b
 ```css
 .top-bar__theme-group button[aria-pressed="true"], .top-bar__theme-group button[aria-pressed="true"]:hover { color: #fff; background: #3478f6; box-shadow: 0 1px 4px rgba(38, 89, 185, 0.28); }
 .top-bar__theme-group button[aria-pressed="false"]:hover { background: rgba(52, 120, 246, 0.14); }
-.top-bar__locale button:hover, .top-bar__pin:hover { background: rgba(255, 255, 255, 0.78); }
+.top-bar__locale > button:hover { background: rgba(255, 255, 255, 0.78); }
+.top-bar__pin:hover { background: rgba(255, 255, 255, 0.78); }
 ```
 
 In the dark rules, replace the current generic theme selected and top-bar hover blocks with:
@@ -516,7 +517,8 @@ In the dark rules, replace the current generic theme selected and top-bar hover 
 ```css
 :root[data-theme="dark"] .top-bar__theme-group button[aria-pressed="true"], :root[data-theme="dark"] .top-bar__theme-group button[aria-pressed="true"]:hover { color: #fff; background: #3478f6; }
 :root[data-theme="dark"] .top-bar__theme-group button[aria-pressed="false"]:hover { background: rgba(138, 194, 255, 0.18); }
-:root[data-theme="dark"] .top-bar__locale button:hover, :root[data-theme="dark"] .top-bar__pin:hover, :root[data-theme="dark"] .session-card:hover { background: rgba(47, 65, 98, 0.72); }
+:root[data-theme="dark"] .top-bar__locale > button:hover { background: rgba(47, 65, 98, 0.72); }
+:root[data-theme="dark"] .top-bar__pin:hover, :root[data-theme="dark"] .session-card:hover { background: rgba(47, 65, 98, 0.72); }
 ```
 
 Retain the existing `button:active` and focus-visible rules.

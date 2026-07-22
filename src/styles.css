@@ -59,7 +59,8 @@ button { font: inherit; }
 .top-bar__theme-group button[aria-pressed="false"]:hover { background: rgba(52, 120, 246, 0.14); }
 .top-bar__locale-menu button { display: flex; width: 100%; height: 28px; min-height: 28px; justify-content: flex-start; padding: 0 7px; border-color: transparent; border-radius: 6px; color: #3f4e65; background: transparent; font-size: 11px; line-height: 1; text-align: left; }
 .top-bar__locale-menu button[aria-checked="true"] { color: #fff; background: #3478f6; box-shadow: 0 1px 4px rgba(38, 89, 185, 0.28); }
-.top-bar__locale button:hover, .top-bar__pin:hover { background: rgba(255, 255, 255, 0.78); }
+.top-bar__locale > button:hover { background: rgba(255, 255, 255, 0.78); }
+.top-bar__pin:hover { background: rgba(255, 255, 255, 0.78); }
 .top-bar button:active { transform: scale(0.97); }
 .top-bar button:focus-visible, .session-card button:focus-visible, .session-card__path:focus-visible { outline: 3px solid rgba(52, 120, 246, 0.55); outline-offset: 2px; }
 
@@ -235,7 +236,8 @@ button { font: inherit; }
 :root[data-theme="dark"] .top-bar button { color: #8ac2ff; }
 :root[data-theme="dark"] .top-bar__theme-group button[aria-pressed="true"], :root[data-theme="dark"] .top-bar__theme-group button[aria-pressed="true"]:hover { color: #fff; background: #3478f6; }
 :root[data-theme="dark"] .top-bar__theme-group button[aria-pressed="false"]:hover { background: rgba(138, 194, 255, 0.18); }
-:root[data-theme="dark"] .top-bar__locale button:hover, :root[data-theme="dark"] .top-bar__pin:hover, :root[data-theme="dark"] .session-card:hover { background: rgba(47, 65, 98, 0.72); }
+:root[data-theme="dark"] .top-bar__locale > button:hover { background: rgba(47, 65, 98, 0.72); }
+:root[data-theme="dark"] .top-bar__pin:hover, :root[data-theme="dark"] .session-card:hover { background: rgba(47, 65, 98, 0.72); }
 :root[data-theme="dark"] .session-card__open-icon { stroke: #b5c2d8; }
 :root[data-theme="dark"] .session-card__timer { background: rgba(13, 23, 41, 0.36); }
 :root[data-theme="dark"] .session-card__timer small { color: #9ba8bb; }
