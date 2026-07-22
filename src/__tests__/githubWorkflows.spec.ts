@@ -86,11 +86,13 @@ describe("GitHub workflows", () => {
     ]);
   });
 
-  it("creates only a guarded ARM64 draft release from an app version tag", () => {
+  it("creates only a guarded ARM64 draft release from a SemVer tag", () => {
     const workflow = readWorkflow("release.yml");
 
     expect(workflow.name).toBe("Release");
-    expect(workflow.on).toEqual({ push: { tags: ["app-v*"] } });
+    expect(workflow.on).toEqual({
+      push: { tags: ["[0-9]*.[0-9]*.[0-9]*"] },
+    });
     expect(workflow.permissions).toEqual({ contents: "write" });
     expect(Object.keys(workflow.jobs)).toEqual(["release"]);
 
@@ -106,7 +108,29 @@ describe("GitHub workflows", () => {
     expect(validation.env).toEqual({
       GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
     });
-    expect(validation.run).toContain('expected_tag="app-v${app_version}"');
+    expect(validation.run).toContain("semver_pattern=");
+    expect(validation.run).toContain(
+      '[[ ! "$GITHUB_REF_NAME" =~ $semver_pattern ]]',
+    );
+    const semverPattern = validation.run?.match(/semver_pattern='([^']+)'/)?.[1];
+    expect(semverPattern).toBeDefined();
+    const semver = new RegExp(semverPattern!);
+    expect(
+      ["0.1.0", "1.2.3-alpha.1+build.5"].every((tag) => semver.test(tag)),
+    ).toBe(true);
+    expect(
+      [
+        "v0.1.0",
+        "app-v0.1.0",
+        "01.2.3",
+        "1.02.3",
+        "1.2.03",
+        "1.2",
+        "1.2.3-01",
+      ].some((tag) => semver.test(tag)),
+    ).toBe(false);
+    expect(validation.run).toContain('expected_tag="$app_version"');
+    expect(validation.run).not.toContain("app-v");
     expect(validation.run).toContain("AUTHORIZATION: basic $authorization");
     expect(validation.run).toContain(
       "fetch --no-tags origin main:refs/remotes/origin/main",
@@ -141,6 +165,7 @@ describe("GitHub workflows", () => {
     });
     expect(build.with).toMatchObject({
       tagName: "${{ github.ref_name }}",
+      releaseName: "Codex Pulse __VERSION__",
       releaseCommitish: "${{ github.sha }}",
       generateReleaseNotes: true,
       releaseDraft: true,

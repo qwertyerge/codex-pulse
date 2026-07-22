@@ -17,7 +17,8 @@ release therefore cannot be notarized.
 
 - Run frontend and Rust validation for pull requests and pushes to `main`.
 - Make those two checks required by the existing `main` branch protection.
-- Create an Apple Silicon macOS Draft Release when an `app-v*` tag is pushed.
+- Create an Apple Silicon macOS Draft Release when a strict SemVer tag without a
+  leading `v` is pushed.
 - Reject tags whose version differs from the Tauri application version.
 - Reject release tags that do not point to history already contained in
   `origin/main`.
@@ -56,25 +57,29 @@ and ref cancels superseded runs on the same pull request or branch.
 ### Tag-Driven Draft Release
 
 Create `.github/workflows/release.yml`, triggered only by pushed tags matching
-`app-v*`. The release job runs on ARM64 `macos-15`, has `contents: write`, and
+the coarse numeric pattern `[0-9]*.[0-9]*.[0-9]*`. The release job runs on ARM64
+`macos-15`, has `contents: write`, and
 uses a concurrency group based on the immutable tag name without cancelling a
 release already in progress.
 
 Checkout uses full history. Before dependencies are installed, a guard step:
 
 1. reads the version from `src-tauri/tauri.conf.json`;
-2. requires the tag to equal `app-v<version>` exactly; and
-3. fetches `origin/main` and requires the tagged commit to be an ancestor of
+2. validates the tag against the SemVer 2.0 grammar, without a leading `v`;
+3. requires the tag to equal `<version>` exactly; and
+4. fetches `origin/main` and requires the tagged commit to be an ancestor of
    that remote branch.
 
 The workflow then installs the same Node.js, pnpm, and Rust toolchains as CI,
 runs `pnpm test` and the Rust test suite, and invokes
 `tauri-apps/tauri-action@v1`. The action receives the triggering tag, names the
-release `Codex Pulse v__VERSION__`, generates release notes, creates a Draft,
+release `Codex Pulse __VERSION__`, generates release notes, creates a Draft,
 disables updater JSON, and builds only the `aarch64-apple-darwin` DMG.
 
 `APPLE_SIGNING_IDENTITY` is set to the pseudo-identity `-`, which tells Tauri to
-apply an ad-hoc signature to the bundle. No repository secret is read.
+apply an ad-hoc signature to the bundle. No user-managed repository secret is
+read; only GitHub's ephemeral built-in token is used for the guarded fetch and
+Draft Release upload.
 
 ## Action Versions and Supply Boundary
 
@@ -107,8 +112,8 @@ requirements.
 ## Testing Strategy
 
 Add `src/__tests__/githubWorkflows.spec.ts`. The repository already uses static
-source-contract tests for configuration boundaries, so this test will read the
-two workflow files without adding a YAML dependency.
+source-contract tests for configuration boundaries, so this test parses both
+workflow files with the lightweight `yaml` development dependency.
 
 The test will first fail because the files do not exist. It will then assert
 the high-value contracts:
@@ -129,7 +134,7 @@ a successful terminal state before merge.
 After the workflow pull request is merged and the `main` CI run passes:
 
 1. apply the required checks to branch protection;
-2. create annotated tag `app-v0.1.0` at the verified `origin/main` commit;
+2. create annotated tag `0.1.0` at the verified `origin/main` commit;
 3. push only that tag;
 4. follow the Release workflow to a terminal state;
 5. inspect the Draft Release and confirm the expected DMG asset;
