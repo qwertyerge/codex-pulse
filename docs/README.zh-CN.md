@@ -2,7 +2,17 @@
 
 [English](../README.md)
 
+[![CI](https://github.com/qwertyerge/codex-pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/qwertyerge/codex-pulse/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/qwertyerge/codex-pulse)](https://github.com/qwertyerge/codex-pulse/releases/latest)
+[![License](https://img.shields.io/github/license/qwertyerge/codex-pulse)](../LICENSE)
+
 Codex Pulse 是用于观察活跃 Codex 任务的轻量 macOS 桌面工具。它读取本地 Codex 会话数据，显示实时运行信息，并可置顶而不干扰当前工作区。
+
+> [!IMPORTANT]
+> Codex Pulse 是独立社区项目，与 OpenAI 无隶属关系，也未获得其认可。
+
+> [!WARNING]
+> 当前发布的 macOS 构建属于实验性产物，未使用 Developer ID 签名，也未经过 Apple 公证，因此尚不支持常规的 Gatekeeper 安装流程。当前推荐从源码构建。
 
 ## 功能
 
@@ -17,6 +27,17 @@ Codex Pulse 是用于观察活跃 Codex 任务的轻量 macOS 桌面工具。它
 - 已安装 Tauri 原生构建依赖的 macOS
 - Node.js 与 pnpm
 - Rust 工具链（推荐通过 `rustup` 安装）
+
+## 从源码构建
+
+```bash
+git clone https://github.com/qwertyerge/codex-pulse.git
+cd codex-pulse
+pnpm install --frozen-lockfile
+pnpm tauri build
+```
+
+macOS 应用和 DMG 会生成在 `src-tauri/target/release/bundle/` 下。
 
 ## 开发、测试与构建
 
@@ -39,3 +60,7 @@ pnpm tauri build
 - `src/`：Vue 组件、composable、国际化、样式与前端测试
 - `src-tauri/src/`：Tauri 命令、Codex 转录解析、监控与本地配置
 - `docs/superpowers/`：设计记录与实现计划
+
+## 许可证
+
+本项目采用 [Apache License 2.0](../LICENSE) 许可证。

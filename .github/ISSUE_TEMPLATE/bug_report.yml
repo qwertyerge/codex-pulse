@@ -1,0 +1,71 @@
+name: Bug report
+description: Report reproducible incorrect behavior in Codex Pulse
+title: "[Bug]: "
+labels: [bug]
+assignees: []
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Codex Pulse version
+      placeholder: 0.1.0 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: macOS 26.0
+    validations:
+      required: true
+  - type: dropdown
+    id: architecture
+    attributes:
+      label: Mac architecture
+      options:
+        - Apple Silicon (arm64)
+        - Intel (x86_64)
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem summary
+      description: Describe the incorrect behavior and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Start Codex Pulse...
+        2. Perform...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Optional. Never paste transcripts, tokens, credentials, complete hooks.json content, or private paths.
+      render: shell
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I removed local Codex transcripts, tokens, credentials, signing material, unredacted hooks.json content, and user-specific paths.
+          required: true

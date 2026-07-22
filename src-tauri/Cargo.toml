@@ -2,6 +2,8 @@
 name = "codex-pulse"
 version = "0.1.0"
 description = "A local macOS monitor for active Codex sessions"
+license = "Apache-2.0"
+repository = "https://github.com/qwertyerge/codex-pulse"
 authors = ["Codex Pulse contributors"]
 edition = "2021"
 rust-version = "1.82"
