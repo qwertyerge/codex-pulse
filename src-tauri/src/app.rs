@@ -35,8 +35,19 @@ pub fn run() -> anyhow::Result<()> {
         .map_err(|error| anyhow::anyhow!(error))
 }
 
+fn main_window_size_constraints() -> tauri::WindowSizeConstraints {
+    use tauri::{LogicalUnit, WindowSizeConstraints};
+
+    WindowSizeConstraints {
+        min_width: Some(LogicalUnit::new(320.0).into()),
+        min_height: Some(LogicalUnit::new(360.0).into()),
+        max_width: Some(LogicalUnit::new(480.0).into()),
+        max_height: None,
+    }
+}
+
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
-    use tauri::{LogicalSize, WebviewUrl, WebviewWindowBuilder};
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
     use tauri_plugin_liquid_glass::{LiquidGlassConfig, LiquidGlassExt};
 
     let always_on_top = app
@@ -49,22 +60,13 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title(product_name())
         .inner_size(360.0, 420.0)
-        .min_inner_size(320.0, 360.0)
-        .max_inner_size(480.0, 10_000.0)
+        .inner_size_constraints(main_window_size_constraints())
         .transparent(true)
         .decorations(true)
         .always_on_top(always_on_top)
         .resizable(true)
         .build()?;
 
-    // Do not hard-code a desktop height: a utility window may grow to the
-    // current display's usable area while leaving a small safety margin.
-    if let Some(monitor) = window.current_monitor()?.or(window.primary_monitor()?) {
-        let work_area = monitor.work_area().size;
-        let scale_factor = monitor.scale_factor();
-        let max_height = ((work_area.height as f64 / scale_factor) - 16.0).max(360.0);
-        window.set_max_size(Some(LogicalSize::new(480.0, max_height)))?;
-    }
     let _ = window.maximize();
 
     let _ = app.liquid_glass().set_effect(
@@ -83,4 +85,30 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use tauri::{LogicalUnit, PixelUnit};
+
+    use super::main_window_size_constraints;
+
+    #[test]
+    fn main_window_has_bounded_width_and_no_maximum_height() {
+        let constraints = main_window_size_constraints();
+
+        assert_eq!(
+            constraints.min_width,
+            Some(PixelUnit::Logical(LogicalUnit::new(320.0)))
+        );
+        assert_eq!(
+            constraints.min_height,
+            Some(PixelUnit::Logical(LogicalUnit::new(360.0)))
+        );
+        assert_eq!(
+            constraints.max_width,
+            Some(PixelUnit::Logical(LogicalUnit::new(480.0)))
+        );
+        assert_eq!(constraints.max_height, None);
+    }
 }

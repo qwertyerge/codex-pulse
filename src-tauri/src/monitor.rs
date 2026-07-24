@@ -336,7 +336,7 @@ mod tests {
                 "{\"timestamp\":\"2026-07-17T07:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"00000000-0000-4000-8000-000000000001\",\"timestamp\":\"2026-07-17T07:00:00Z\",\"cwd\":\"/root\",\"source\":\"cli\"}}\n",
                 "{\"timestamp\":\"2026-07-17T07:01:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"root-turn\"}}\n",
                 "{\"timestamp\":\"2026-07-17T07:02:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"root-turn\"}}\n",
-                "{\"timestamp\":\"2026-07-17T07:04:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":81.0,\"window_minutes\":10080,\"resets_at\":1784870653}}}}\n"
+                "{\"timestamp\":\"2026-07-17T07:04:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"primary\":{\"used_percent\":81.0,\"window_minutes\":10080,\"resets_at\":1784870653}}}}\n"
             ),
         )
         .unwrap();
@@ -442,7 +442,7 @@ mod tests {
             sessions.join("quota.jsonl"),
             concat!(
                 "{\"timestamp\":\"2026-07-17T07:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"quota\",\"timestamp\":\"2026-07-17T07:00:00Z\",\"cwd\":\"/repo\",\"source\":\"cli\"}}\n",
-                "{\"timestamp\":\"2026-07-17T07:02:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"primary\":{\"used_percent\":81.0,\"window_minutes\":10080,\"resets_at\":2}}}}\n"
+                "{\"timestamp\":\"2026-07-17T07:02:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"primary\":{\"used_percent\":81.0,\"window_minutes\":10080,\"resets_at\":2}}}}\n"
             ),
         )
         .unwrap();
@@ -459,6 +459,50 @@ mod tests {
     }
 
     #[test]
+    fn quota_source_keeps_default_quota_when_newer_model_limit_is_at_one_hundred() {
+        let temp = tempfile::tempdir().unwrap();
+        let day = chrono::Local::now().format("%Y/%m/%d").to_string();
+        let sessions = temp.path().join("sessions").join(day);
+        fs::create_dir_all(&sessions).unwrap();
+        let transcript = sessions.join("mixed-limits.jsonl");
+        fs::write(
+            &transcript,
+            concat!(
+                "{\"timestamp\":\"2026-07-17T07:01:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex_bengalfox\",\"primary\":{\"used_percent\":100.0,\"window_minutes\":10080,\"resets_at\":3}}}}\n",
+                "{\"timestamp\":\"2026-07-17T07:02:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"rate_limits\":{\"limit_id\":\"codex\",\"primary\":{\"used_percent\":64.0,\"window_minutes\":10080,\"resets_at\":2}}}}\n"
+            ),
+        )
+        .unwrap();
+        let mut cache = QuotaSourceCache::default();
+
+        assert_eq!(
+            cache
+                .latest_weekly_quota(temp.path(), 1_000)
+                .unwrap()
+                .used_percent,
+            64
+        );
+
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&transcript)
+            .unwrap();
+        writeln!(
+            file,
+            "{{\"timestamp\":\"2026-07-17T07:03:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"limit_id\":\"codex_bengalfox\",\"primary\":{{\"used_percent\":100.0,\"window_minutes\":10080,\"resets_at\":3}}}}}}}}"
+        )
+        .unwrap();
+
+        assert_eq!(
+            cache
+                .latest_weekly_quota(temp.path(), 1_000)
+                .unwrap()
+                .used_percent,
+            64
+        );
+    }
+
+    #[test]
     fn quota_source_reads_a_tail_observation_without_session_metadata() {
         let temp = tempfile::tempdir().unwrap();
         let day = chrono::Local::now().format("%Y/%m/%d").to_string();
@@ -470,7 +514,7 @@ mod tests {
         writeln!(file).unwrap();
         writeln!(
             file,
-            "{{\"timestamp\":\"2026-07-17T07:02:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"primary\":{{\"used_percent\":81.0,\"window_minutes\":10080,\"resets_at\":2}}}}}}}}"
+            "{{\"timestamp\":\"2026-07-17T07:02:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"limit_id\":\"codex\",\"primary\":{{\"used_percent\":81.0,\"window_minutes\":10080,\"resets_at\":2}}}}}}}}"
         )
         .unwrap();
         let mut cache = QuotaSourceCache::default();
@@ -485,7 +529,7 @@ mod tests {
 
         writeln!(
             file,
-            "{{\"timestamp\":\"2026-07-17T07:03:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"primary\":{{\"used_percent\":82.0,\"window_minutes\":10080,\"resets_at\":2}}}}}}}}"
+            "{{\"timestamp\":\"2026-07-17T07:03:00Z\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"limit_id\":\"codex\",\"primary\":{{\"used_percent\":82.0,\"window_minutes\":10080,\"resets_at\":2}}}}}}}}"
         )
         .unwrap();
 

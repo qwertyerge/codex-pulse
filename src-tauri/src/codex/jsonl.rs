@@ -187,6 +187,10 @@ fn parse_event(payload: &Value, occurred_at_ms: i64) -> Result<ParsedRecord> {
 }
 
 fn parse_weekly_quota(rate_limits: &Value, observed_at_ms: i64) -> Option<WeeklyQuota> {
+    if rate_limits.get("limit_id").and_then(Value::as_str) != Some("codex") {
+        return None;
+    }
+
     let bucket = ["primary", "secondary"].into_iter().find_map(|slot| {
         rate_limits
             .get(slot)
@@ -343,9 +347,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_weekly_quota_from_primary_or_secondary_window() {
-        let primary = r#"{"timestamp":"2026-07-17T12:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":81.0,"window_minutes":10080,"resets_at":1784870653},"secondary":null}}}"#;
-        let secondary = r#"{"timestamp":"2026-07-17T12:01:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":12.0,"window_minutes":300,"resets_at":1784800000},"secondary":{"used_percent":22.0,"window_minutes":10080,"resets_at":1784871000}}}}"#;
+    fn parses_default_codex_weekly_quota_from_primary_or_secondary_window() {
+        let primary = r#"{"timestamp":"2026-07-17T12:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":81.0,"window_minutes":10080,"resets_at":1784870653},"secondary":null}}}"#;
+        let secondary = r#"{"timestamp":"2026-07-17T12:01:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":12.0,"window_minutes":300,"resets_at":1784800000},"secondary":{"used_percent":22.0,"window_minutes":10080,"resets_at":1784871000}}}}"#;
 
         for (line, used, remaining) in [(primary, 81, 19), (secondary, 22, 78)] {
             let ParsedRecord::WeeklyQuota(quota) = parse_line(line).unwrap().unwrap() else {
@@ -357,8 +361,25 @@ mod tests {
     }
 
     #[test]
+    fn ignores_weekly_quota_that_is_not_the_default_codex_limit() {
+        for limit_id in [Some("codex_bengalfox"), Some("premium"), None] {
+            let limit_id = limit_id
+                .map(|value| format!(r#""limit_id":"{value}","#))
+                .unwrap_or_default();
+            let line = format!(
+                r#"{{"timestamp":"2026-07-17T12:00:00Z","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{{limit_id}"primary":{{"used_percent":100.0,"window_minutes":10080,"resets_at":1784870653}}}}}}}}"#
+            );
+
+            assert!(matches!(
+                parse_line(&line).unwrap(),
+                Some(ParsedRecord::Ignored)
+            ));
+        }
+    }
+
+    #[test]
     fn ignores_rate_limit_buckets_that_are_not_weekly() {
-        let line = r#"{"timestamp":"2026-07-17T12:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":81.0,"window_minutes":300,"resets_at":1784870653}}}}"#;
+        let line = r#"{"timestamp":"2026-07-17T12:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":81.0,"window_minutes":300,"resets_at":1784870653}}}}"#;
 
         assert!(matches!(
             parse_line(line).unwrap(),
