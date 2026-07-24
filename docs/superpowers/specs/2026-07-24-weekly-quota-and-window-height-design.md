@@ -81,7 +81,7 @@ followed by a default Codex 64% observation, and a newer model-specific
 observation that must not replace the latest default quota.
 
 Window constraints will be constructed by a pure helper so a Rust unit test can
-assert the unchanged minimum size, the 480 pixel maximum width, and the absent
+assert the unchanged minimum size, the 480-pixel maximum width, and the absent
 maximum height without requiring a live desktop.
 
 Verification will include the focused RED/GREEN tests, the full Rust and

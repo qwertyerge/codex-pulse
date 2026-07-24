@@ -457,9 +457,9 @@ bundle errors.
 Run this read-only command:
 
 ```bash
-task_codex_home=${CODEX_HOME:-/Users/loki/.codex}
+task_codex_home="${CODEX_HOME:-$HOME/.codex}"
 find "$task_codex_home/sessions" -type f -name '*.jsonl' -print0 \
-  | xargs -0 jq -rc 'select(.type == "event_msg" and .payload.type == "token_count" and .payload.rate_limits.limit_id == "codex") | {timestamp,used:.payload.rate_limits.primary.used_percent,resets_at:.payload.rate_limits.primary.resets_at}' \
+  | xargs -0 jq -rc 'select(.type == "event_msg" and .payload.type == "token_count" and .payload.rate_limits.limit_id == "codex") | ([.payload.rate_limits.primary, .payload.rate_limits.secondary] | map(select(.window_minutes == 10080)) | first) as $bucket | select($bucket != null) | {timestamp,used:$bucket.used_percent,resets_at:$bucket.resets_at}' \
   | jq -s 'sort_by(.timestamp) | last'
 ```
 
