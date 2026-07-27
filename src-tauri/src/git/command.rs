@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(test)]
+use std::sync::mpsc::SyncSender;
+
 #[derive(Debug)]
 pub enum GitCommandError {
     Spawn(std::io::Error),
@@ -64,6 +67,9 @@ pub trait GitRunner {
 pub struct ProcessGitRunner {
     executable: PathBuf,
     timeout: Duration,
+    reap_timeout: Duration,
+    #[cfg(test)]
+    reaper_completed_tx: Option<SyncSender<()>>,
 }
 
 impl ProcessGitRunner {
@@ -71,6 +77,9 @@ impl ProcessGitRunner {
         Self {
             executable,
             timeout,
+            reap_timeout: Duration::from_millis(100),
+            #[cfg(test)]
+            reaper_completed_tx: None,
         }
     }
 }
@@ -90,17 +99,54 @@ fn collect_pipe(
         .map_err(GitCommandError::Wait)
 }
 
-fn terminate_and_reap(child: &mut Child) {
+fn terminate_and_reap(mut child: Child, reap_timeout: Duration) -> Option<Child> {
     let _ = child.kill();
-    let deadline = Instant::now() + Duration::from_millis(100);
+    let deadline = Instant::now() + reap_timeout;
 
     loop {
         match child.try_wait() {
-            Ok(Some(_)) | Err(_) => return,
-            Ok(None) if Instant::now() >= deadline => return,
+            Ok(Some(_)) => return None,
+            Ok(None) if Instant::now() >= deadline => return Some(child),
             Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => return Some(child),
         }
     }
+}
+
+fn finish_reaping(
+    child: Option<Child>,
+    stdout_reader: JoinHandle<Result<Vec<u8>, std::io::Error>>,
+    stderr_reader: JoinHandle<Result<Vec<u8>, std::io::Error>>,
+) {
+    if let Some(mut child) = child {
+        let _ = child.wait();
+    }
+    let _ = collect_pipe(stdout_reader);
+    let _ = collect_pipe(stderr_reader);
+}
+
+#[cfg(not(test))]
+fn spawn_background_reaper(
+    child: Option<Child>,
+    stdout_reader: JoinHandle<Result<Vec<u8>, std::io::Error>>,
+    stderr_reader: JoinHandle<Result<Vec<u8>, std::io::Error>>,
+) {
+    std::thread::spawn(move || finish_reaping(child, stdout_reader, stderr_reader));
+}
+
+#[cfg(test)]
+fn spawn_background_reaper(
+    child: Option<Child>,
+    stdout_reader: JoinHandle<Result<Vec<u8>, std::io::Error>>,
+    stderr_reader: JoinHandle<Result<Vec<u8>, std::io::Error>>,
+    completed_tx: Option<SyncSender<()>>,
+) {
+    std::thread::spawn(move || {
+        finish_reaping(child, stdout_reader, stderr_reader);
+        if let Some(completed_tx) = completed_tx {
+            let _ = completed_tx.send(());
+        }
+    });
 }
 
 impl GitRunner for ProcessGitRunner {
@@ -132,12 +178,30 @@ impl GitRunner for ProcessGitRunner {
                     });
                 }
                 Ok(None) if Instant::now() >= deadline => {
-                    terminate_and_reap(&mut child);
+                    let child = terminate_and_reap(child, self.reap_timeout);
+                    #[cfg(not(test))]
+                    spawn_background_reaper(child, stdout_reader, stderr_reader);
+                    #[cfg(test)]
+                    spawn_background_reaper(
+                        child,
+                        stdout_reader,
+                        stderr_reader,
+                        self.reaper_completed_tx.clone(),
+                    );
                     return Err(GitCommandError::Timeout);
                 }
                 Ok(None) => std::thread::sleep(Duration::from_millis(10)),
                 Err(error) => {
-                    terminate_and_reap(&mut child);
+                    let child = terminate_and_reap(child, self.reap_timeout);
+                    #[cfg(not(test))]
+                    spawn_background_reaper(child, stdout_reader, stderr_reader);
+                    #[cfg(test)]
+                    spawn_background_reaper(
+                        child,
+                        stdout_reader,
+                        stderr_reader,
+                        self.reaper_completed_tx.clone(),
+                    );
                     return Err(GitCommandError::Wait(error));
                 }
             }
@@ -147,7 +211,12 @@ impl GitRunner for ProcessGitRunner {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsString, path::PathBuf, time::Duration};
+    use std::{
+        ffi::OsString,
+        path::PathBuf,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
 
     use super::{GitCommandError, GitRunner, ProcessGitRunner};
 
@@ -174,6 +243,43 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, GitCommandError::Timeout));
+    }
+
+    #[test]
+    fn timeout_returns_promptly_while_a_background_reaper_finishes_cleanup() {
+        let fixture = tempfile::tempdir().unwrap();
+        let completion_marker = fixture.path().join("completed");
+        let (reaper_completed_tx, reaper_completed_rx) = mpsc::sync_channel(1);
+        let runner = ProcessGitRunner {
+            executable: PathBuf::from("/bin/sh"),
+            timeout: Duration::from_millis(20),
+            reap_timeout: Duration::ZERO,
+            reaper_completed_tx: Some(reaper_completed_tx),
+        };
+        let script = format!(
+            "sleep 0.4; printf completed > {}",
+            completion_marker.to_string_lossy()
+        );
+
+        let started_at = Instant::now();
+        let error = runner
+            .run(
+                std::path::Path::new("/"),
+                &[OsString::from("-c"), OsString::from(script)],
+            )
+            .unwrap_err();
+        let returned_after = started_at.elapsed();
+
+        assert!(matches!(error, GitCommandError::Timeout));
+        assert!(
+            returned_after < Duration::from_millis(250),
+            "timeout returned after {returned_after:?}"
+        );
+        assert!(!completion_marker.exists());
+        reaper_completed_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("background reaper completes");
+        assert!(!completion_marker.exists());
     }
 
     #[test]

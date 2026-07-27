@@ -151,7 +151,7 @@ impl<R: GitRunner> GitMetadataSource for GitRepositoryResolver<R> {
         let primary_checkout_path = primary.path.to_string_lossy().into_owned();
         let default_branch = primary.branch;
 
-        let default_upstream = match default_branch.as_deref() {
+        let reported_upstream = match default_branch.as_deref() {
             Some(branch) => self.optional_stdout(
                 &primary.path,
                 git_args(
@@ -167,8 +167,8 @@ impl<R: GitRunner> GitMetadataSource for GitRepositoryResolver<R> {
             )?,
             None => None,
         };
-        let remote_url = match default_branch.as_deref() {
-            Some(branch) => match self.optional_stdout(
+        let configured_remote = match default_branch.as_deref() {
+            Some(branch) => self.optional_stdout(
                 &primary.path,
                 git_args(
                     &primary.path,
@@ -180,25 +180,66 @@ impl<R: GitRunner> GitMetadataSource for GitRepositoryResolver<R> {
                 ),
                 &[1],
                 "config --get branch.<default>.remote",
-            )? {
-                Some(remote) => self
-                    .optional_stdout(
-                        &primary.path,
-                        git_args(
-                            &primary.path,
-                            vec![
-                                OsString::from("remote"),
-                                OsString::from("get-url"),
-                                OsString::from(remote),
-                            ],
-                        ),
-                        &[2],
-                        "remote get-url",
-                    )?
-                    .and_then(|url| sanitize_remote_url(&url)),
-                None => None,
-            },
+            )?,
             None => None,
+        };
+        let configured_merge = match default_branch.as_deref() {
+            Some(branch) => self.optional_stdout(
+                &primary.path,
+                git_args(
+                    &primary.path,
+                    vec![
+                        OsString::from("config"),
+                        OsString::from("--get"),
+                        OsString::from(format!("branch.{branch}.merge")),
+                    ],
+                ),
+                &[1],
+                "config --get branch.<default>.merge",
+            )?,
+            None => None,
+        };
+        let default_upstream = match (configured_remote.as_deref(), configured_merge.as_deref()) {
+            (Some(remote), Some(merge_ref)) => {
+                reported_upstream.or_else(|| configured_upstream(remote, merge_ref))
+            }
+            _ => None,
+        };
+        let remote_url = match (default_upstream.as_ref(), configured_remote.as_deref()) {
+            (Some(_), Some(remote)) => {
+                let configured_url = self.optional_stdout(
+                    &primary.path,
+                    git_args(
+                        &primary.path,
+                        vec![
+                            OsString::from("config"),
+                            OsString::from("--get"),
+                            OsString::from(format!("remote.{remote}.url")),
+                        ],
+                    ),
+                    &[1],
+                    "config --get remote.<tracking>.url",
+                )?;
+                match configured_url {
+                    Some(_) => self
+                        .optional_stdout(
+                            &primary.path,
+                            git_args(
+                                &primary.path,
+                                vec![
+                                    OsString::from("remote"),
+                                    OsString::from("get-url"),
+                                    OsString::from(remote),
+                                ],
+                            ),
+                            &[2],
+                            "remote get-url",
+                        )?
+                        .and_then(|url| sanitize_remote_url(&url)),
+                    None => None,
+                }
+            }
+            _ => None,
         };
 
         Ok(RepositoryRecord {
@@ -241,6 +282,17 @@ impl<R: GitRunner> GitRepositoryResolver<R> {
         let value = value.trim();
         Ok((!value.is_empty()).then(|| value.to_owned()))
     }
+}
+
+fn configured_upstream(remote: &str, merge_ref: &str) -> Option<String> {
+    let branch = merge_ref
+        .strip_prefix("refs/heads/")
+        .filter(|branch| !branch.is_empty())?;
+    Some(if remote == "." {
+        branch.to_owned()
+    } else {
+        format!("{remote}/{branch}")
+    })
 }
 
 fn git_args(cwd: &Path, command: Vec<OsString>) -> Vec<OsString> {
@@ -425,6 +477,79 @@ mod tests {
     }
 
     #[test]
+    fn does_not_resolve_a_remote_without_a_configured_tracking_upstream() {
+        let (_fixture, primary) = initialized_repository();
+        run_git(
+            &primary,
+            &[
+                "remote",
+                "add",
+                "company",
+                "https://example.com/acme/project.git",
+            ],
+        );
+        run_git(&primary, &["config", "branch.trunk.remote", "company"]);
+
+        let repository = resolve_repository(&primary);
+
+        assert_eq!(repository.default_branch.as_deref(), Some("trunk"));
+        assert_eq!(repository.default_upstream, None);
+        assert_eq!(repository.remote_url, None);
+        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_eq!(repository.project_name, "primary");
+    }
+
+    #[test]
+    fn keeps_the_configured_upstream_when_its_remote_does_not_exist() {
+        let (_fixture, primary) = initialized_repository();
+        run_git(&primary, &["config", "branch.trunk.remote", "missing"]);
+        run_git(
+            &primary,
+            &["config", "branch.trunk.merge", "refs/heads/trunk"],
+        );
+
+        let repository = resolve_repository(&primary);
+
+        assert_eq!(repository.default_branch.as_deref(), Some("trunk"));
+        assert_eq!(
+            repository.default_upstream.as_deref(),
+            Some("missing/trunk")
+        );
+        assert_eq!(repository.remote_url, None);
+        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_eq!(repository.project_name, "primary");
+    }
+
+    #[test]
+    fn does_not_treat_a_remote_name_as_its_missing_url() {
+        let (_fixture, primary) = initialized_repository();
+        run_git(
+            &primary,
+            &[
+                "config",
+                "remote.company.fetch",
+                "+refs/heads/*:refs/remotes/company/*",
+            ],
+        );
+        run_git(&primary, &["config", "branch.trunk.remote", "company"]);
+        run_git(
+            &primary,
+            &["config", "branch.trunk.merge", "refs/heads/trunk"],
+        );
+
+        let repository = resolve_repository(&primary);
+
+        assert_eq!(repository.default_branch.as_deref(), Some("trunk"));
+        assert_eq!(
+            repository.default_upstream.as_deref(),
+            Some("company/trunk")
+        );
+        assert_eq!(repository.remote_url, None);
+        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_eq!(repository.project_name, "primary");
+    }
+
+    #[test]
     fn resolves_a_linked_worktree_and_its_primary_repository() {
         let fixture = tempfile::tempdir().unwrap();
         let fixture_path = std::fs::canonicalize(fixture.path()).unwrap();
@@ -499,6 +624,30 @@ mod tests {
             .resolve_worktree(&plain_directory)
             .unwrap()
             .is_none());
+    }
+
+    fn initialized_repository() -> (tempfile::TempDir, PathBuf) {
+        let fixture = tempfile::tempdir().unwrap();
+        let fixture_path = std::fs::canonicalize(fixture.path()).unwrap();
+        let primary = fixture_path.join("primary");
+        run_git(
+            &fixture_path,
+            &["init", "-b", "trunk", primary.to_str().unwrap()],
+        );
+        run_git(&primary, &["config", "user.name", "Codex Pulse Tests"]);
+        run_git(&primary, &["config", "user.email", "pulse@example.invalid"]);
+        run_git(&primary, &["commit", "--allow-empty", "-m", "initial"]);
+        (fixture, primary)
+    }
+
+    fn resolve_repository(primary: &Path) -> super::RepositoryRecord {
+        let resolver = GitRepositoryResolver {
+            runner: ProcessGitRunner::new(OsString::from("git").into(), Duration::from_secs(1)),
+        };
+        let identity = resolver.resolve_worktree(primary).unwrap().unwrap();
+        resolver
+            .resolve_repository(primary, &identity, 123)
+            .unwrap()
     }
 
     fn run_git(cwd: &Path, args: &[&str]) {
