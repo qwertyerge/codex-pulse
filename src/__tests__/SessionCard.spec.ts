@@ -28,12 +28,40 @@ describe("SessionCard", () => {
     expect(wrapper.text()).toContain("02:00");
     const projectLink = wrapper.get("a.session-card__path");
     expect(projectLink.text()).toBe("project");
-    expect(projectLink.attributes("title")).toBe("/workspace/project");
+    expect(projectLink.attributes("title")).toBeUndefined();
     expect(wrapper.get("button").attributes("aria-label")).toContain("Open Codex task");
 
     await projectLink.trigger("click");
     expect(wrapper.emitted("open-project")).toEqual([["/workspace/project"]]);
     expect(wrapper.emitted("open")).toBeUndefined();
+  });
+
+  it("passes git context to the project identity without changing the open path", async () => {
+    const wrapper = mount(SessionCard, {
+      props: {
+        session: {
+          threadId: "00000000-0000-4000-8000-000000000001",
+          title: "Git task",
+          cwd: "/worktrees/feature/project",
+          git: {
+            projectName: "project",
+            primaryCheckoutPath: "/src/project",
+            branch: "feature/git",
+            defaultBranch: "trunk",
+            defaultUpstream: "company/trunk",
+            remoteUrl: "https://example.com/acme/project.git"
+          },
+          sessionCreatedAtMs: 1_000,
+          currentRunStartedAtMs: 2_000
+        },
+        nowMs: 3_000
+      },
+      global: { plugins: [i18n] }
+    });
+
+    expect(wrapper.get(".session-card__branch").text()).toContain("feature/git");
+    await wrapper.get(".session-card__path").trigger("click");
+    expect(wrapper.emitted("open-project")).toEqual([["/worktrees/feature/project"]]);
   });
 
   it("shows only the latest meaningful event below the timers", () => {

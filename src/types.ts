@@ -2,10 +2,20 @@ export interface SessionSnapshot {
   threadId: string;
   title: string;
   cwd: string;
+  git?: SessionGitContext;
   sessionCreatedAtMs: number;
   currentRunStartedAtMs: number;
   recentEvent?: RecentEvent;
   lastUserMessage?: UserMessage;
+}
+
+export interface SessionGitContext {
+  projectName: string;
+  primaryCheckoutPath: string;
+  branch?: string;
+  defaultBranch?: string;
+  defaultUpstream?: string;
+  remoteUrl?: string;
 }
 export interface UserMessage { content: string; occurredAtMs: number; }
 

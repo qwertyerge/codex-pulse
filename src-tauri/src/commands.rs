@@ -5,6 +5,7 @@ use std::sync::{
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -14,6 +15,10 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::codex::discovery::ScanCache;
 use crate::config::{AppConfig, ConfigStore};
+use crate::git::{
+    command::ProcessGitRunner, enrichment::GitSessionEnricher, resolver::GitRepositoryResolver,
+    store::GitCacheStore,
+};
 use crate::initialization::{InitializationFeed, INITIALIZATION_PROGRESS_EVENT};
 use crate::model::{
     AppSnapshot, InitializationPhase, InitializationSnapshot, LocaleMode, MonitoringView,
@@ -27,6 +32,7 @@ pub struct AppState {
     pub config: Mutex<AppConfig>,
     cached_snapshot: RwLock<CachedSnapshot>,
     scan_cache: Mutex<ScanCache>,
+    git_enricher: Mutex<GitSessionEnricher<GitRepositoryResolver<ProcessGitRunner>>>,
     quota_source_cache: Mutex<QuotaSourceCache>,
     initialization: Mutex<InitializationFeed>,
     recent_event_display: Mutex<HashMap<String, DisplayedRecentEvent>>,
@@ -51,17 +57,27 @@ struct DisplayedRecentEvent {
 impl AppState {
     pub fn new(codex_home: PathBuf, store: ConfigStore) -> Result<Self> {
         let config = store.load()?;
-        Ok(Self {
+        Ok(Self::with_config(codex_home, store, config))
+    }
+
+    fn with_config(codex_home: PathBuf, store: ConfigStore, config: AppConfig) -> Self {
+        let cache_path = store.path().with_file_name("git-cache.sqlite3");
+        let cache = GitCacheStore::open(&cache_path).ok();
+        let runner = ProcessGitRunner::new(PathBuf::from("git"), Duration::from_secs(2));
+        let resolver = GitRepositoryResolver::new(runner);
+
+        Self {
             codex_home,
             store,
             config: Mutex::new(config),
             cached_snapshot: RwLock::new(CachedSnapshot::default()),
             scan_cache: Mutex::new(ScanCache::default()),
+            git_enricher: Mutex::new(GitSessionEnricher::new(resolver, cache)),
             quota_source_cache: Mutex::new(QuotaSourceCache::default()),
             initialization: Mutex::new(InitializationFeed::default()),
             recent_event_display: Mutex::new(HashMap::new()),
             refresh_in_flight: AtomicBool::new(false),
-        })
+        }
     }
 
     pub fn from_environment() -> Self {
@@ -70,17 +86,8 @@ impl AppState {
             .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
             .unwrap_or_else(|| PathBuf::from(".codex"));
         let store = ConfigStore::for_user();
-        Self::new(codex_home, store.clone()).unwrap_or_else(|_| Self {
-            codex_home: PathBuf::from(".codex"),
-            store,
-            config: Mutex::new(AppConfig::default()),
-            cached_snapshot: RwLock::new(CachedSnapshot::default()),
-            scan_cache: Mutex::new(ScanCache::default()),
-            quota_source_cache: Mutex::new(QuotaSourceCache::default()),
-            initialization: Mutex::new(InitializationFeed::default()),
-            recent_event_display: Mutex::new(HashMap::new()),
-            refresh_in_flight: AtomicBool::new(false),
-        })
+        Self::new(codex_home.clone(), store.clone())
+            .unwrap_or_else(|_| Self::with_config(codex_home, store, AppConfig::default()))
     }
 
     fn cached_snapshot(&self) -> (Vec<SessionSnapshot>, Option<WeeklyQuota>) {
@@ -306,11 +313,16 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
                 InitializationPhase::ReconcilingSessions,
                 "Reconciling active Codex sessions",
             );
-            let mut scan_cache = state
-                .scan_cache
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Codex Pulse scan cache lock is poisoned"))?;
-            let mut scan = scan_active_sessions_with_cache(&codex_home, now_ms, &mut scan_cache)?;
+            let mut scan = {
+                let mut scan_cache = state
+                    .scan_cache
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Codex Pulse scan cache lock is poisoned"))?;
+                scan_active_sessions_with_cache(&codex_home, now_ms, &mut scan_cache)?
+            };
+            if let Ok(mut enricher) = state.git_enricher.lock() {
+                enricher.enrich(&mut scan.sessions, now_ms);
+            }
             scan.weekly_quota = weekly_quota.or(scan.weekly_quota);
             Ok::<_, anyhow::Error>(scan)
         })
@@ -472,6 +484,7 @@ mod tests {
             thread_id: "root".into(),
             title: "Root".into(),
             cwd: "/repo".into(),
+            git: None,
             session_created_at_ms: 1_000,
             current_run_started_at_ms: 2_000,
             recent_event: event,
@@ -525,6 +538,19 @@ mod tests {
         assert!(state.config.lock().unwrap().always_on_top);
         assert!(state.store.load().unwrap().always_on_top);
         assert!(state.cached_snapshot().0.is_empty());
+    }
+
+    #[test]
+    fn app_state_places_git_cache_beside_user_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_path = temp.path().join("settings/config.json");
+        let _state = AppState::new(
+            temp.path().join("codex-home"),
+            ConfigStore::new(config_path.clone()),
+        )
+        .unwrap();
+
+        assert!(config_path.with_file_name("git-cache.sqlite3").is_file());
     }
 
     #[test]

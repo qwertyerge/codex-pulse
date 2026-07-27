@@ -208,6 +208,7 @@ impl SessionRegistry {
             thread_id: root.thread_id.clone(),
             title: root.title.display().to_owned(),
             cwd: root.cwd.clone(),
+            git: None,
             session_created_at_ms: root.session_created_at_ms,
             current_run_started_at_ms: earliest_active_start,
             recent_event: self
@@ -278,6 +279,7 @@ mod tests {
                 thread_id: "root".into(),
                 title: "Root title".into(),
                 cwd: "/repo".into(),
+                git: None,
                 session_created_at_ms: 1_000,
                 current_run_started_at_ms: 3_000,
                 recent_event: None,
