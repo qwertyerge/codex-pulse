@@ -738,6 +738,23 @@ git commit -m "feat: add Windows bundle assets"
 - Modify: `src/__tests__/githubWorkflows.spec.ts`
 - Test: `src/__tests__/githubWorkflows.spec.ts`
 
+#### Task 5 Review Amendment
+
+The user selected the conservative timeout-cleanup policy after two review
+rounds showed that snapshot-based descendant tracking cannot prove Windows
+process-tree quiescence:
+
+- remove the custom CIM/process-handle ancestry implementation;
+- when installer, Hook helper, or uninstaller execution times out, attempt
+  `Kill(true)` but permanently set a script-scoped cleanup-mutation gate to
+  false for the remainder of the run;
+- after that timeout, `finally` may warn but must not run an uninstaller or
+  remove files, because a descendant may still be active;
+- retain normal silent uninstall and the exact-path/non-reparse fallback for
+  non-timeout partial-install or validation failures; and
+- rely on disposal of the ephemeral GitHub-hosted runner for any timeout-path
+  residue instead of racing a potentially live process tree.
+
 - [ ] **Step 1: Make the workflow contract RED**
 
 Change the expected CI job keys to:
