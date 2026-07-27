@@ -93,6 +93,123 @@ function Read-ProcessDiagnostic {
   return $content.Trim()
 }
 
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class CodexPulseWindowProbe
+{
+    [StructLayout(LayoutKind.Sequential)]
+    public struct Rect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetClientRect(IntPtr window, out Rect rect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsZoomed(IntPtr window);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(IntPtr window);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
+}
+"@
+
+function Get-ApplicationWindowDiagnostic {
+  param(
+    [Parameter(Mandatory = $true)]
+    [IntPtr]$Handle
+  )
+
+  $previousDpiContext = [CodexPulseWindowProbe]::SetThreadDpiAwarenessContext(
+    [IntPtr]::new(-4)
+  )
+  try {
+    $rect = [CodexPulseWindowProbe+Rect]::new()
+    if (-not [CodexPulseWindowProbe]::GetClientRect($Handle, [ref]$rect)) {
+      $win32Error = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+      throw "Failed to read the application client area; Win32 error $win32Error"
+    }
+
+    $dpi = [CodexPulseWindowProbe]::GetDpiForWindow($Handle)
+    if ($dpi -eq 0) {
+      $dpi = 96
+    }
+  }
+  finally {
+    if ($previousDpiContext -ne [IntPtr]::Zero) {
+      [void][CodexPulseWindowProbe]::SetThreadDpiAwarenessContext(
+        $previousDpiContext
+      )
+    }
+  }
+  $physicalWidth = $rect.Right - $rect.Left
+  $physicalHeight = $rect.Bottom - $rect.Top
+
+  return [pscustomobject]@{
+    Maximized = [CodexPulseWindowProbe]::IsZoomed($Handle)
+    Dpi = $dpi
+    LogicalClientWidth = [Math]::Round(
+      ($physicalWidth * 96.0) / $dpi,
+      2
+    )
+    LogicalClientHeight = [Math]::Round(
+      ($physicalHeight * 96.0) / $dpi,
+      2
+    )
+  }
+}
+
+function Assert-InstalledShortcuts {
+  $shortcutPaths = @(
+    (
+      Join-Path `
+        ([Environment]::GetFolderPath(
+          [Environment+SpecialFolder]::DesktopDirectory
+        )) `
+        "Codex Pulse.lnk"
+    ),
+    (
+      Join-Path `
+        ([Environment]::GetFolderPath(
+          [Environment+SpecialFolder]::Programs
+        )) `
+        "Codex Pulse.lnk"
+    )
+  )
+  $shell = New-Object -ComObject WScript.Shell
+
+  foreach ($path in $shortcutPaths) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+      throw "Expected installed shortcut at $path"
+    }
+
+    $shortcut = $shell.CreateShortcut($path)
+    $target = [System.IO.Path]::GetFullPath($shortcut.TargetPath)
+    if (
+      -not [string]::Equals(
+        $target,
+        $script:app,
+        [System.StringComparison]::OrdinalIgnoreCase
+      )
+    ) {
+      throw "Installed shortcut $path targets $target instead of $script:app"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($shortcut.Arguments)) {
+      throw "Installed shortcut $path unexpectedly supplies arguments: $($shortcut.Arguments)"
+    }
+  }
+}
+
 function Invoke-ApplicationStartupSmoke {
   param(
     [Parameter(Mandatory = $true)]
@@ -148,6 +265,48 @@ function Invoke-ApplicationStartupSmoke {
         throw "Installed application exited during the $SurvivalSeconds-second survival window with code $($process.ExitCode). stderr: $diagnostic"
       }
       Start-Sleep -Milliseconds 250
+    }
+
+    $process.Refresh()
+    $windowDiagnostic = Get-ApplicationWindowDiagnostic `
+      -Handle $process.MainWindowHandle
+    $windowSummary = (
+      "client={0}x{1} logical pixels, dpi={2}" -f
+      $windowDiagnostic.LogicalClientWidth,
+      $windowDiagnostic.LogicalClientHeight,
+      $windowDiagnostic.Dpi
+    )
+    if ($windowDiagnostic.Maximized) {
+      throw "Installed application window is maximized; expected a compact utility window ($windowSummary)"
+    }
+    if ($windowDiagnostic.LogicalClientWidth -gt 480.0) {
+      throw "Installed application client width exceeds 480 logical pixels ($windowSummary)"
+    }
+    if (
+      [Math]::Abs($windowDiagnostic.LogicalClientWidth - 360.0) -gt 1.0 -or
+      [Math]::Abs($windowDiagnostic.LogicalClientHeight - 420.0) -gt 1.0
+    ) {
+      throw "Installed application did not start at the expected 360x420 logical client size ($windowSummary)"
+    }
+    Write-Host "Installed application startup: $windowSummary"
+
+    $terminalProcessNames = @(
+      "cmd.exe",
+      "OpenConsole.exe",
+      "powershell.exe",
+      "pwsh.exe",
+      "WindowsTerminal.exe"
+    )
+    $terminalChildren = @(
+      Get-CimInstance Win32_Process |
+        Where-Object {
+          $_.ParentProcessId -eq $process.Id -and
+          $_.Name -in $terminalProcessNames
+        } |
+        Select-Object -ExpandProperty Name
+    )
+    if ($terminalChildren.Count -ne 0) {
+      throw "Installed application spawned terminal processes: $($terminalChildren -join ', ')"
     }
   }
   finally {
@@ -349,6 +508,8 @@ try {
   ) {
     throw "NSIS did not install CodexPulse.exe and uninstall.exe"
   }
+
+  Assert-InstalledShortcuts
 
   $image = [System.IO.File]::ReadAllBytes($script:app)
   if ($image.Length -lt 0x40) {

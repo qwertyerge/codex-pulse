@@ -59,10 +59,31 @@ fn main_window_size_constraints() -> tauri::WindowSizeConstraints {
     }
 }
 
+#[derive(Debug, PartialEq)]
+struct MainWindowPlatformPolicy {
+    maximizable: bool,
+    maximize_on_create: bool,
+}
+
+fn main_window_platform_policy(target_os: &str) -> MainWindowPlatformPolicy {
+    if target_os == "windows" {
+        MainWindowPlatformPolicy {
+            maximizable: false,
+            maximize_on_create: false,
+        }
+    } else {
+        MainWindowPlatformPolicy {
+            maximizable: true,
+            maximize_on_create: true,
+        }
+    }
+}
+
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     use tauri_plugin_liquid_glass::{LiquidGlassConfig, LiquidGlassExt};
 
+    let platform_policy = main_window_platform_policy(std::env::consts::OS);
     let always_on_top = app
         .state::<crate::commands::AppState>()
         .config
@@ -78,9 +99,12 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .decorations(true)
         .always_on_top(always_on_top)
         .resizable(true)
+        .maximizable(platform_policy.maximizable)
         .build()?;
 
-    let _ = window.maximize();
+    if platform_policy.maximize_on_create {
+        let _ = window.maximize();
+    }
 
     let _ = app.liquid_glass().set_effect(
         &window,
@@ -104,10 +128,10 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
 mod tests {
     use tauri::{LogicalUnit, PixelUnit};
 
-    use super::main_window_size_constraints;
+    use super::{main_window_platform_policy, main_window_size_constraints};
 
     #[test]
-    fn main_window_has_bounded_width_and_no_maximum_height() {
+    fn main_window_uses_pd_measured_bounds() {
         let constraints = main_window_size_constraints();
 
         assert_eq!(
@@ -123,5 +147,21 @@ mod tests {
             Some(PixelUnit::Logical(LogicalUnit::new(480.0)))
         );
         assert_eq!(constraints.max_height, None);
+    }
+
+    #[test]
+    fn windows_main_window_starts_compact_and_cannot_maximize() {
+        let policy = main_window_platform_policy("windows");
+
+        assert!(!policy.maximizable);
+        assert!(!policy.maximize_on_create);
+    }
+
+    #[test]
+    fn macos_main_window_keeps_existing_maximize_behavior() {
+        let policy = main_window_platform_policy("macos");
+
+        assert!(policy.maximizable);
+        assert!(policy.maximize_on_create);
     }
 }

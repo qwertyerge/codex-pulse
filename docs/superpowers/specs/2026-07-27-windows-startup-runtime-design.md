@@ -130,6 +130,93 @@ These checks establish the startup fix under Windows x64 emulation. They do
 not claim native ARM64 support or close unrelated interactive acceptance
 items.
 
+## Windows Utility-Window Behavior
+
+PD review found a second Windows-specific startup defect after the runtime
+panic was fixed. The builder declares a 360 by 420 logical-pixel window with a
+maximum logical width of 480, but `create_main_window` then unconditionally
+maximizes it. Windows maximization bypasses the ordinary resize constraint, so
+the first visible window covers the work area and exceeds the intended maximum
+width.
+
+Windows uses a compact utility-window policy:
+
+- initial inner size remains 360 by 420 logical pixels;
+- minimum inner size remains 320 by 360 logical pixels on Windows and macOS;
+- maximum inner width remains 480 logical pixels, with no maximum height;
+- ordinary resizing remains enabled; and
+- maximization is disabled, and the window is not maximized during creation.
+
+macOS and other existing platform behavior remain unchanged. The policy is
+represented as a small pure value so host tests can assert the Windows branch
+without depending on a live window manager.
+
+The installed-package startup smoke also rejects a Windows window that is
+maximized or whose DPI-normalized client width exceeds 480 logical pixels.
+This turns the PD finding into a native Windows package gate instead of relying
+only on a source-level policy test.
+
+## Narrow Top-Bar Measurement
+
+The Windows 360-pixel initial viewport exposed two interacting responsive
+defects. First, the controls container was allowed to shrink even though its
+icon buttons cannot. At a 330-pixel browser viewport, the control container
+shrunk to 151 pixels while its content required 155 pixels, and the top bar's
+scroll width exceeded its client width. Second, a 360-pixel media query changed
+the shell padding, brand font, mark size, control gap, and button padding.
+Resizing therefore passed through four discrete states: large brand without
+ellipsis, large brand with ellipsis, small brand without ellipsis, and small
+brand with ellipsis. The two small-brand states visibly collapsed in PD, and
+crossing 360 to 361 logical pixels shifted the controls by 3 logical pixels.
+At 250% scaling that jump is approximately 7.5 physical pixels.
+
+The single-row behavior is:
+
+- the pulse mark, `Codex Pulse` name, and complete controls never shrink;
+- only the localized active-count text may shrink and use ellipsis; and
+- TopBar size, spacing, and right-edge inset do not change at 360 pixels.
+
+Real-browser measurement after applying that flex priority found:
+
+- the brand remains 16 pixels and the mark remains 19 pixels at every tested
+  width;
+- the controls remain 157 pixels wide and 14 pixels from the right viewport
+  edge;
+- controls move exactly 1 pixel to the right when the viewport moves from 360
+  to 361 pixels; and
+- 316 pixels clips the brand edge while 320 pixels preserves the full brand.
+
+PD then confirmed the boundary at its actual 240 DPI / 250% scaling. A
+360-logical-pixel client area measured exactly 900 physical pixels. At 312
+logical pixels the rendered name was visibly clipped to `Codex Puls`, 316
+pixels was the rasterization boundary, and 320 pixels preserved the full brand
+and every control. The Windows minimum inner width is therefore 320 logical
+pixels, leaving 4 logical pixels / 10 physical pixels over the observed
+boundary.
+
+## Terminal and Shortcut Boundary
+
+The release executable remains a Windows GUI-subsystem binary and does not
+launch a terminal. The terminal observed during PD review came from an
+interactive PowerShell measurement task. That task is not part of the product
+startup path and must remain hidden or be avoided in subsequent visual runs.
+
+A scheduled-install harness also created desktop and Start Menu shortcuts whose
+targets inherited the harness's `systemprofile` path even though the
+application was installed for `loki`. The PD shortcuts are repaired to point
+directly at the per-user `CodexPulse.exe`.
+
+The installed-package gate verifies that both shortcuts:
+
+- exist;
+- point directly to the validated per-user executable; and
+- contain no arguments that introduce a shell launcher.
+
+The startup smoke also rejects direct terminal-process children of
+`CodexPulse.exe`. Final PD acceptance launches through the repaired shortcut
+and requires no `pwsh`, PowerShell, `cmd`, OpenConsole, or Windows Terminal
+process in the interactive session.
+
 ## Delivery Boundary
 
 Implementation starts from `origin/main` on

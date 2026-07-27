@@ -475,3 +475,169 @@ git diff origin/main..HEAD -- \
 
 Confirm no generated schemas, build outputs, transcripts, credentials, or
 unrelated files are tracked. Do not push or open a pull request.
+
+---
+
+### Task 4: Preserve compact Windows utility-window bounds
+
+**Files:**
+- Modify: `src-tauri/src/app.rs`
+- Modify: `scripts/verify-windows-package.ps1`
+- Modify: `docs/superpowers/specs/2026-07-27-windows-startup-runtime-design.md`
+
+**Interfaces:**
+- Consumes: the existing 360 by 420 initial size and 320 to 480 width constraints.
+- Produces: a Windows-only non-maximizable startup policy plus a native package geometry gate.
+
+- [ ] **Step 1: Add a failing Windows platform-policy test**
+
+Add a pure main-window platform policy and a host unit test requiring Windows
+to start without maximization and with maximization disabled.
+
+Run:
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml \
+  app::tests::windows_main_window_starts_compact_and_cannot_maximize \
+  -- --exact
+```
+
+Expected RED: the current all-platform maximize behavior violates both Windows
+assertions.
+
+- [ ] **Step 2: Add a failing installed-package geometry smoke**
+
+Extend `Invoke-ApplicationStartupSmoke` to inspect the native main window after
+it appears. Normalize its client width using the window DPI, then reject a
+window that is maximized or wider than 480 logical pixels.
+
+Run the verifier against the already-built package that still contains the
+unconditional maximize call.
+
+Expected RED: startup remains alive, but the verifier rejects the maximized
+window and reports its measured geometry.
+
+- [ ] **Step 3: Apply the Windows-only window policy**
+
+Use the pure platform policy from the builder:
+
+- Windows: `maximizable(false)` and no create-time maximize call;
+- non-Windows: retain the current maximizable and create-time maximize behavior.
+
+Do not change the existing size constraints, transparency, decorations,
+resizability, or macOS activation policy.
+
+- [ ] **Step 4: Rebuild and verify GREEN on PD**
+
+Run the host Rust test, the full host suites, rebuild the x64 NSIS package, and
+run the package verifier in PD.
+
+Then install the fixed package for the interactive `loki` user and verify:
+
+- a fresh initial window uses the compact 360 by 420 logical-pixel content size;
+- it is not maximized;
+- its client width cannot exceed 480 logical pixels through ordinary resize;
+- it remains alive without the Tokio reactor panic; and
+- single-instance and `__hook` behavior remain intact.
+
+- [ ] **Step 5: Review and commit the extension**
+
+```bash
+git diff --check
+git diff -- \
+  src-tauri/src/app.rs \
+  scripts/verify-windows-package.ps1 \
+  docs/superpowers/specs/2026-07-27-windows-startup-runtime-design.md \
+  docs/superpowers/plans/2026-07-27-windows-startup-runtime.md
+git add \
+  src-tauri/src/app.rs \
+  scripts/verify-windows-package.ps1 \
+  docs/superpowers/specs/2026-07-27-windows-startup-runtime-design.md \
+  docs/superpowers/plans/2026-07-27-windows-startup-runtime.md
+git commit -m "fix: preserve compact Windows window bounds"
+```
+
+Do not push, open a pull request, merge, or update the release without a new
+delivery decision.
+
+---
+
+### Task 5: Measure and preserve the narrow Windows header
+
+**Files:**
+- Modify: `src/components/TopBar.vue`
+- Modify: `src/styles.css`
+- Create: `src/__tests__/topBarLayout.spec.ts`
+- Modify: `src-tauri/src/app.rs`
+- Modify: `scripts/verify-windows-package.ps1`
+- Modify: `docs/superpowers/specs/2026-07-27-windows-startup-runtime-design.md`
+
+**Interfaces:**
+- Consumes: localized active-count text, the complete icon-control group, and native shortcuts.
+- Produces: a measurement-derived Windows minimum width, a non-collapsing single-row header, and terminal-free shortcut startup evidence.
+
+- [ ] **Step 1: Record browser and Rust RED**
+
+At 330 pixels, record that `.top-bar__controls` has a 151-pixel client width
+against a 155-pixel scroll width and that the top bar overflows horizontally.
+
+Add stylesheet contract tests requiring controls, pulse mark, and brand name
+to remain non-shrinking while the active count retains ellipsis. Also reject
+TopBar sizing, spacing, or padding overrides inside the 360-pixel media query.
+Run the frontend suite and require the new tests to fail.
+
+After PD boundary measurement, update the shared constraint test to expect a
+320-pixel minimum and require it to fail against the provisional 300-pixel
+value.
+
+- [ ] **Step 2: Apply the single-row flex priority**
+
+Give the brand name an explicit class. Keep the mark, name, and controls at
+their intrinsic widths. Leave the active-count span as the only shrinking,
+overflow-hidden flex item. Remove the narrow media query's alternate TopBar
+size mode so resizing has only a continuous full-count to ellipsis transition.
+
+Do not hide controls, change icon sizes, wrap the header, or change the macOS
+minimum width.
+
+- [ ] **Step 3: Measure the post-fix boundary**
+
+Use a real browser layout engine at bounded widths from 280 through 400 pixels.
+Confirm that controls remain 157 pixels wide and 14 pixels from the right edge
+on both sides of the 360-pixel breakpoint. Record the first width with the
+complete 16-pixel brand name, 19-pixel mark, full controls, and no horizontal
+page overflow.
+
+Repeat boundary measurement in PD at its actual 240 DPI / 250% display scale.
+Request exact DPI-normalized client widths with a hidden native probe and
+visually compare 312, 316, and 320 logical pixels. Use 320 pixels for Windows:
+312 visibly clips the name, 316 is the rasterization boundary, and 320 leaves
+4 logical pixels / 10 physical pixels of margin.
+
+- [ ] **Step 4: Guard shortcuts and terminal-free startup**
+
+Extend the installed package verifier to require desktop and Start Menu
+shortcuts that directly target the validated per-user executable with no
+arguments.
+
+After the normal startup survival and geometry checks, reject direct
+`CodexPulse.exe` children named `cmd.exe`, `OpenConsole.exe`,
+`powershell.exe`, `pwsh.exe`, or `WindowsTerminal.exe`.
+
+- [ ] **Step 5: Rebuild and run final PD acceptance**
+
+Build the x64 NSIS package, run the full package verifier, then install under
+the interactive `loki` profile with correct user environment variables.
+Visually verify the 360-pixel initial header, resize down to the 320-pixel
+minimum, and launch from the repaired desktop shortcut.
+
+Acceptance requires no header overlap, only active-count truncation, disabled
+maximize state, no terminal window, one long-lived app process, and no terminal
+process in the interactive session.
+
+- [ ] **Step 6: Complete full verification and commit**
+
+Run frontend tests/build, host Rust tests, formatting, Windows cross-test
+compilation, package verifier, and final diff/status checks. Commit locally on
+`codex/fix-windows-startup`; do not push, merge, create a pull request, or
+update the release without a new delivery decision.
