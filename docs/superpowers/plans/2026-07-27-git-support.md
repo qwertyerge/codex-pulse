@@ -40,10 +40,9 @@
 - `src/components/SessionCard.vue`: delegates its second line to `ProjectIdentity`.
 - `src/styles.css`: project identity, branch, hover-card, light/dark, and narrow-window rules.
 - `src/i18n.ts`: Git labels in all four supported locales.
-- `src/__tests__/ProjectIdentity.spec.ts`: component behavior and placement.
+- `src/__tests__/ProjectIdentity.spec.ts`: component behavior, applied styles, and placement.
 - `src/__tests__/SessionCard.spec.ts`: integration with the existing session card and open-project event.
 - `src/__tests__/i18n.spec.ts`: complete Git-copy locale contract.
-- `src/__tests__/footerLayout.spec.ts`: non-regression CSS contract for the card line.
 
 ---
 
@@ -883,13 +882,6 @@ SessionGitContext {
 ```
 
 Add `source(&self) -> &S` under `#[cfg(test)]` so tests can inspect call counts.
-Also expose the optional persisted cache location for AppState verification:
-
-```rust
-pub fn cache_path(&self) -> Option<&Path> {
-    self.store.as_ref().map(GitCacheStore::path)
-}
-```
 
 Export the module:
 
@@ -970,7 +962,7 @@ git commit -m "feat: enrich sessions with cached git context"
 - Produces: enriched `CachedSnapshot.sessions`.
 - Persists: `<config-directory>/git-cache.sqlite3`.
 
-- [ ] **Step 1: Write a failing AppState cache-location test**
+- [ ] **Step 1: Write a failing AppState persistence-location test**
 
 Inside `commands.rs` tests, add:
 
@@ -979,20 +971,13 @@ Inside `commands.rs` tests, add:
 fn app_state_places_git_cache_beside_user_config() {
     let temp = tempfile::tempdir().unwrap();
     let config_path = temp.path().join("settings/config.json");
-    let state = AppState::new(
+    let _state = AppState::new(
         temp.path().join("codex-home"),
         ConfigStore::new(config_path.clone()),
     )
     .unwrap();
 
-    assert_eq!(
-        state
-            .git_enricher
-            .lock()
-            .unwrap()
-            .cache_path(),
-        Some(config_path.with_file_name("git-cache.sqlite3").as_path())
-    );
+    assert!(config_path.with_file_name("git-cache.sqlite3").is_file());
 }
 ```
 
@@ -1004,7 +989,7 @@ Run:
 cargo test --manifest-path src-tauri/Cargo.toml commands::tests::app_state_places_git_cache_beside_user_config
 ```
 
-Expected: compile failure because `AppState` does not own `git_enricher`.
+Expected: assertion failure because `AppState` does not create the Git cache.
 
 - [ ] **Step 3: Add production AppState ownership**
 
@@ -1027,8 +1012,8 @@ let resolver = GitRepositoryResolver::new(runner);
 let git_enricher = Mutex::new(GitSessionEnricher::new(resolver, cache));
 ```
 
-`GitSessionEnricher::cache_path()` returns the optional store path for the
-test. Cache-open failure must result in `None`, not an `AppState` error.
+Cache-open failure must result in an enricher without a store, not an
+`AppState` error.
 
 - [ ] **Step 4: Wire enrichment after Codex scanning**
 
@@ -1076,7 +1061,6 @@ git commit -m "feat: enrich reconciled sessions with git"
 - Modify: `src/styles.css`
 - Modify: `src/i18n.ts`
 - Modify: `src/__tests__/i18n.spec.ts`
-- Modify: `src/__tests__/footerLayout.spec.ts`
 
 **Interfaces:**
 - Consumes: `cwd: string` and `git?: SessionGitContext`.
@@ -1086,9 +1070,12 @@ git commit -m "feat: enrich reconciled sessions with git"
 
 - [ ] **Step 1: Write failing project identity behavior tests**
 
-Create `src/__tests__/ProjectIdentity.spec.ts` with cleanup after each test:
+Create `src/__tests__/ProjectIdentity.spec.ts`, import the real stylesheet, and
+add cleanup after each test:
 
 ```ts
+import "../styles.css";
+
 const originalInnerHeight = window.innerHeight;
 
 afterEach(() => {
@@ -1481,16 +1468,29 @@ ring:
 :root[data-theme="dark"] .project-hover-card dd { color: #c2ccdc; }
 ```
 
-Extend `footerLayout.spec.ts` with:
+Add an applied-style test to `ProjectIdentity.spec.ts`:
 
 ```ts
-it("keeps project identity compact and renders the hover card above scroll clipping", () => {
-  expect(rule(".session-card__project")).toContain("display: flex;");
-  expect(rule(".session-card__project")).toContain("min-width: 0;");
-  expect(rule(".session-card__branch")).toContain("max-width: 48%;");
-  expect(rule(".project-hover-card")).toContain("position: fixed;");
-  expect(rule(".project-hover-card")).toContain("z-index: 20;");
-  expect(rule(".project-hover-card")).toContain("pointer-events: none;");
+it("applies compact identity layout and an unclipped fixed hover card", async () => {
+  const wrapper = mount(ProjectIdentity, {
+    attachTo: document.body,
+    props: { cwd: "/worktrees/project", git },
+    global: { plugins: [i18n] }
+  });
+
+  const project = getComputedStyle(wrapper.get(".session-card__project").element);
+  const branch = getComputedStyle(wrapper.get(".session-card__branch").element);
+  expect(project.display).toBe("flex");
+  expect(project.minWidth).toBe("0px");
+  expect(branch.maxWidth).toBe("48%");
+
+  await wrapper.get(".session-card__path").trigger("mouseenter");
+  await nextTick();
+  const popup = document.body.querySelector('[role="tooltip"]') as HTMLElement;
+  const popupStyle = getComputedStyle(popup);
+  expect(popupStyle.position).toBe("fixed");
+  expect(popupStyle.zIndex).toBe("20");
+  expect(popupStyle.pointerEvents).toBe("none");
 });
 ```
 
@@ -1499,7 +1499,7 @@ it("keeps project identity compact and renders the hover card above scroll clipp
 Run:
 
 ```bash
-pnpm test -- src/__tests__/ProjectIdentity.spec.ts src/__tests__/SessionCard.spec.ts src/__tests__/i18n.spec.ts src/__tests__/footerLayout.spec.ts
+pnpm test -- src/__tests__/ProjectIdentity.spec.ts src/__tests__/SessionCard.spec.ts src/__tests__/i18n.spec.ts
 pnpm build
 ```
 
@@ -1508,7 +1508,7 @@ Expected: all component, localization, CSS-contract, and Vue type checks pass.
 - [ ] **Step 9: Commit the session-card UI**
 
 ```bash
-git add src/components/ProjectIdentity.vue src/components/SessionCard.vue src/__tests__/ProjectIdentity.spec.ts src/__tests__/SessionCard.spec.ts src/styles.css src/i18n.ts src/__tests__/i18n.spec.ts src/__tests__/footerLayout.spec.ts
+git add src/components/ProjectIdentity.vue src/components/SessionCard.vue src/__tests__/ProjectIdentity.spec.ts src/__tests__/SessionCard.spec.ts src/styles.css src/i18n.ts src/__tests__/i18n.spec.ts
 git commit -m "feat: show git context on session cards"
 ```
 
