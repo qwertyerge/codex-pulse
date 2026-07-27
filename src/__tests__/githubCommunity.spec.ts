@@ -11,10 +11,14 @@ interface IssueForm {
   body: Array<{ id?: string; type: string }>;
 }
 
+function normalizeLineEndings(content: string) {
+  return content.replace(/\r\n?/g, "\n");
+}
+
 function readRoot(path: string) {
   const absolute = resolve(process.cwd(), path);
   expect(existsSync(absolute), `${path} should exist`).toBe(true);
-  return readFileSync(absolute, "utf8");
+  return normalizeLineEndings(readFileSync(absolute, "utf8"));
 }
 
 function readIssueForm(name: string) {
@@ -22,6 +26,12 @@ function readIssueForm(name: string) {
 }
 
 describe("GitHub community configuration", () => {
+  it("normalizes repository fixture line endings", () => {
+    expect(normalizeLineEndings("first\r\nsecond\rthird\n")).toBe(
+      "first\nsecond\nthird\n",
+    );
+  });
+
   it("declares Apache-2.0 consistently", () => {
     const license = readRoot("LICENSE");
     const packageJson = JSON.parse(readRoot("package.json")) as {
