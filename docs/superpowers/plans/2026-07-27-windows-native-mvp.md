@@ -482,6 +482,13 @@ git commit -m "fix: add Windows hook transport"
 - Test: `src-tauri/src/app.rs`
 - Test: `src-tauri/src/commands.rs`
 
+#### Task 3 Review Amendment
+
+Tauri 2.11.5 defines `App::set_activation_policy` on `&mut self`, and the
+`setup` callback supplies `&mut App`. The user approved correcting both
+platform helper signatures below from `&tauri::App` to `&mut tauri::App`;
+this is a type correction only and does not change the approved behavior.
+
 - [ ] **Step 1: Add RED tests for runtime degradation**
 
 Add methods to the test call sites before implementing them:
@@ -540,12 +547,12 @@ Add:
 
 ```rust
 #[cfg(target_os = "macos")]
-fn configure_activation_policy(app: &tauri::App) {
+fn configure_activation_policy(app: &mut tauri::App) {
     app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
 
 #[cfg(not(target_os = "macos"))]
-fn configure_activation_policy(_app: &tauri::App) {}
+fn configure_activation_policy(_app: &mut tauri::App) {}
 ```
 
 Replace the unconditional call in `setup` with
