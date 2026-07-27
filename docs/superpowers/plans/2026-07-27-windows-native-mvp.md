@@ -39,7 +39,10 @@ implementation:
   documentation as explicit TDD exceptions; and
 - retain and update the repository's existing parsed
   `githubWorkflows.spec.ts` and `githubCommunity.spec.ts` governance tests
-  rather than removing established gates.
+  rather than removing established gates; and
+- pass Tauri build options directly after `pnpm tauri build`. The user
+  approved removing the extra `--` separator after live validation proved it
+  forwards `--debug`/`--target` to Cargo instead of Tauri.
 
 ---
 
@@ -711,7 +714,7 @@ exception. Validate them through their actual Tauri consumer:
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml tray::tests
 pnpm tauri info
-pnpm tauri build -- --debug --bundles app
+pnpm tauri build --debug --bundles app
 ```
 
 Expected on macOS: the tray behavior test, Tauri config loading, and debug app
@@ -756,7 +759,7 @@ pnpm install --frozen-lockfile
 pnpm test
 pnpm build
 cargo test --manifest-path src-tauri/Cargo.toml
-pnpm tauri build -- --target x86_64-pc-windows-msvc --bundles nsis
+pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
 pwsh -NoProfile -File scripts/verify-windows-package.ps1 -BundleDirectory src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
 ```
 
@@ -1042,7 +1045,7 @@ Add the exact Windows source build:
 
 ```powershell
 pnpm install --frozen-lockfile
-pnpm tauri build -- --target x86_64-pc-windows-msvc --bundles nsis
+pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
 ```
 
 State the output root
@@ -1103,7 +1106,7 @@ pnpm test
 pnpm build
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
-pnpm tauri build -- --debug --bundles app
+pnpm tauri build --debug --bundles app
 git diff --check
 git status --short
 ```

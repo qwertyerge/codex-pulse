@@ -232,7 +232,7 @@ The Windows job performs:
 5. `pnpm test`;
 6. `pnpm build`;
 7. `cargo test --manifest-path src-tauri/Cargo.toml`;
-8. `pnpm tauri build -- --target x86_64-pc-windows-msvc --bundles nsis`; and
+8. `pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis`; and
 9. the Windows package simulation described below.
 
 After the job succeeds on its pull request and merged `main`, add
