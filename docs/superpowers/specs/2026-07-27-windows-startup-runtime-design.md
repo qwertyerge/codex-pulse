@@ -107,9 +107,9 @@ The verifier must:
 The smoke uses the ordinary production startup path. It does not add a
 test-only application argument that could bypass future initialization bugs.
 
-The existing package-verifier source contract test is extended so removal of
-the normal-launch gate is visible in the cross-platform frontend suite. The
-Windows CI execution remains the authoritative behavioral proof.
+The package smoke runs in the `Rust (Windows)` job. Its Windows execution is
+the authoritative behavioral proof; no source-text assertion or simulated
+cross-platform PowerShell test is added.
 
 ## Parallels Desktop Acceptance
 
