@@ -29,4 +29,21 @@ describe("localization runtime", () => {
     stop();
     i18n.global.locale.value = "en";
   });
+
+  it.each([
+    ["en", ["No branch", "Default branch", "Remote repository", "Not configured"]],
+    ["zh-CN", ["无分支", "默认分支", "远程仓库", "未配置"]],
+    ["fr", ["Aucune branche", "Branche par défaut", "Dépôt distant", "Non configuré"]],
+    ["de", ["Kein Branch", "Standardbranch", "Remote-Repository", "Nicht konfiguriert"]]
+  ] as const)("defines complete Git copy for %s", (locale, expected) => {
+    i18n.global.locale.value = locale;
+    const actual = [
+      i18n.global.t("session.noBranch"),
+      i18n.global.t("session.defaultBranch"),
+      i18n.global.t("session.remoteRepository"),
+      i18n.global.t("session.notConfigured")
+    ];
+    i18n.global.locale.value = "en";
+    expect(actual).toEqual(expected);
+  });
 });

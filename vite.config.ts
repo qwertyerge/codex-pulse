@@ -6,5 +6,9 @@ export default defineConfig({
   clearScreen: false,
   server: { port: 5180, strictPort: true },
   build: { target: ["es2019", "safari13"], outDir: "dist", emptyOutDir: true },
-  test: { environment: "jsdom", include: ["src/__tests__/**/*.spec.ts"] }
+  test: {
+    environment: "jsdom",
+    include: ["src/__tests__/**/*.spec.ts"],
+    css: { include: [/.+/] }
+  }
 });
