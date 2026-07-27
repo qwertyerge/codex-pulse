@@ -14,7 +14,7 @@ async fn hook_subcommand_connects_to_the_user_pipe_and_exits() {
             ^ ((std::process::id() as u128) << 96),
     );
     let endpoint = format!(r"\\.\pipe\com.codexpulse.desktop.test.{}.events", unique_id);
-    let mut server = ServerOptions::new()
+    let server = ServerOptions::new()
         .first_pipe_instance(true)
         .create(&endpoint)
         .unwrap();

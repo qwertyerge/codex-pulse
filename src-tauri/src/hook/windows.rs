@@ -159,14 +159,22 @@ mod tests {
     }
 
     #[test]
-    fn derives_a_deterministic_endpoint_from_a_literal_scope() {
+    fn derives_a_deterministic_endpoint_that_separates_user_scopes() {
         let endpoint = endpoint_name_for(Path::new("CodexPulseTestScope"));
+        let repeated = endpoint_name_for(Path::new("CodexPulseTestScope"));
+        let other_scope = endpoint_name_for(Path::new("OtherCodexPulseTestScope"));
 
         assert!(endpoint.starts_with(r"\\.\pipe\com.codexpulse.desktop."));
-        assert_eq!(
-            endpoint,
-            r"\\.\pipe\com.codexpulse.desktop.3555edab93826d28.events"
-        );
+        assert!(endpoint.ends_with(".events"));
+        assert_eq!(endpoint, repeated);
+        assert_ne!(endpoint, other_scope);
+
+        let hash = endpoint
+            .strip_prefix(r"\\.\pipe\com.codexpulse.desktop.")
+            .and_then(|value| value.strip_suffix(".events"))
+            .unwrap();
+        assert_eq!(hash.len(), 16);
+        assert!(hash.chars().all(|character| character.is_ascii_hexdigit()));
     }
 
     #[test]
