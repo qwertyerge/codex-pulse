@@ -1,5 +1,13 @@
 use tauri::Manager;
 
+#[cfg(target_os = "macos")]
+fn configure_activation_policy(app: &mut tauri::App) {
+    app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn configure_activation_policy(_app: &mut tauri::App) {}
+
 pub fn product_name() -> &'static str {
     "Codex Pulse"
 }
@@ -13,11 +21,16 @@ pub fn run() -> anyhow::Result<()> {
         }))
         .manage(crate::commands::AppState::from_environment())
         .setup(|app| {
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            configure_activation_policy(app);
             app.manage(crate::tray::TrayState::default());
             crate::tray::setup(app)?;
             create_main_window(app)?;
-            crate::hook::start_listener(app.handle().clone())?;
+            if let Err(error) = crate::hook::start_listener(app.handle().clone()) {
+                app.state::<crate::commands::AppState>()
+                    .set_monitoring_degraded_reason(format!(
+                        "Live hook listener unavailable: {error:#}"
+                    ));
+            }
             crate::commands::start_fallback_reconciliation(app.handle().clone());
             Ok(())
         })
