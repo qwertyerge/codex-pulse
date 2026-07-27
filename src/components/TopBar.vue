@@ -28,7 +28,7 @@ function setLocale(locale: LocaleMode) {
       <svg class="top-bar__mark" viewBox="0 0 20 20" aria-hidden="true">
         <path d="M2 11h4l2-5 3 9 2-4h5" />
       </svg>
-      <span>Codex Pulse</span>
+      <span class="top-bar__name">Codex Pulse</span>
       <span class="top-bar__count">{{ t("topBar.active", { count: props.activeCount }) }}</span>
     </span>
     <span class="top-bar__controls">

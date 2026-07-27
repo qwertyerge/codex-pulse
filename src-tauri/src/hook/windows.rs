@@ -29,8 +29,14 @@ pub fn notify_running_instance() {
 }
 
 pub fn start_listener(app: AppHandle) -> anyhow::Result<()> {
-    let mut listener = PipeListener::bind_at(endpoint_name())?;
     tauri::async_runtime::spawn(async move {
+        let mut listener = match PipeListener::bind_at(endpoint_name()).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                report_listener_unavailable(&app, error);
+                return;
+            }
+        };
         let app_for_refresh = app.clone();
         run_listener_loop(
             &mut listener,
@@ -40,6 +46,12 @@ pub fn start_listener(app: AppHandle) -> anyhow::Result<()> {
         .await;
     });
     Ok(())
+}
+
+fn report_listener_unavailable(app: &AppHandle, error: std::io::Error) {
+    app.state::<crate::commands::AppState>()
+        .set_monitoring_degraded_reason(format!("Live hook listener unavailable: {error}"));
+    let _ = app.emit(crate::hook::SESSIONS_CHANGED_EVENT, ());
 }
 
 trait HookListener {
@@ -98,7 +110,7 @@ struct PipeListener {
 }
 
 impl PipeListener {
-    fn bind_at(endpoint: String) -> std::io::Result<Self> {
+    async fn bind_at(endpoint: String) -> std::io::Result<Self> {
         let server = ServerOptions::new()
             .first_pipe_instance(true)
             .create(&endpoint)?;
@@ -178,6 +190,21 @@ mod tests {
     }
 
     #[test]
+    fn constructing_a_listener_future_does_not_require_a_runtime() {
+        let unique_id = uuid::Uuid::from_u128(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+                ^ ((std::process::id() as u128) << 96),
+        );
+        let endpoint = format!(r"\\.\pipe\com.codexpulse.desktop.test.{unique_id}.events");
+
+        let future = PipeListener::bind_at(endpoint);
+        drop(future);
+    }
+
+    #[test]
     fn creates_the_replacement_before_dropping_the_connected_server() {
         let events = Rc::new(RefCell::new(Vec::new()));
         let mut server = DropProbe {
@@ -210,7 +237,7 @@ mod tests {
                 ^ ((std::process::id() as u128) << 96),
         );
         let endpoint = format!(r"\\.\pipe\com.codexpulse.desktop.test.{}.events", unique_id);
-        let mut listener = PipeListener::bind_at(endpoint.clone()).unwrap();
+        let mut listener = PipeListener::bind_at(endpoint.clone()).await.unwrap();
 
         notify_at(&endpoint);
         tokio::time::timeout(Duration::from_secs(5), listener.accept())
