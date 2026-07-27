@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(repository.default_branch.as_deref(), Some("trunk"));
         assert_eq!(repository.default_upstream, None);
         assert_eq!(repository.remote_url, None);
-        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_same_path(&repository.primary_checkout_path, &primary);
         assert_eq!(repository.project_name, "primary");
     }
 
@@ -516,7 +516,7 @@ mod tests {
             Some("missing/trunk")
         );
         assert_eq!(repository.remote_url, None);
-        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_same_path(&repository.primary_checkout_path, &primary);
         assert_eq!(repository.project_name, "primary");
     }
 
@@ -545,7 +545,7 @@ mod tests {
             Some("company/trunk")
         );
         assert_eq!(repository.remote_url, None);
-        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_same_path(&repository.primary_checkout_path, &primary);
         assert_eq!(repository.project_name, "primary");
     }
 
@@ -602,7 +602,7 @@ mod tests {
         let repository = resolver
             .resolve_repository(&linked, &identity, 123)
             .unwrap();
-        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_same_path(&repository.primary_checkout_path, &primary);
         assert_eq!(repository.project_name, "primary");
         assert_eq!(repository.default_branch.as_deref(), Some("trunk"));
         assert_eq!(
@@ -650,6 +650,13 @@ mod tests {
         {
             std::fs::canonicalize(fixture.path()).unwrap()
         }
+    }
+
+    fn assert_same_path(actual: &str, expected: &Path) {
+        assert_eq!(
+            std::fs::canonicalize(actual).unwrap(),
+            std::fs::canonicalize(expected).unwrap()
+        );
     }
 
     fn resolve_repository(primary: &Path) -> super::RepositoryRecord {
