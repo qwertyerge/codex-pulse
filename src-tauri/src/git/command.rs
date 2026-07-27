@@ -1,7 +1,9 @@
 use std::{
     ffi::OsString,
+    io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -73,6 +75,34 @@ impl ProcessGitRunner {
     }
 }
 
+fn read_pipe(mut pipe: impl Read) -> Result<Vec<u8>, std::io::Error> {
+    let mut bytes = Vec::new();
+    pipe.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn collect_pipe(
+    reader: JoinHandle<Result<Vec<u8>, std::io::Error>>,
+) -> Result<Vec<u8>, GitCommandError> {
+    reader
+        .join()
+        .map_err(|_| GitCommandError::Wait(std::io::Error::other("could not collect Git output")))?
+        .map_err(GitCommandError::Wait)
+}
+
+fn terminate_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let deadline = Instant::now() + Duration::from_millis(100);
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() >= deadline => return,
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+}
+
 impl GitRunner for ProcessGitRunner {
     fn run(&self, cwd: &Path, args: &[OsString]) -> Result<GitCommandOutput, GitCommandError> {
         let mut child = Command::new(&self.executable)
@@ -86,23 +116,30 @@ impl GitRunner for ProcessGitRunner {
             .spawn()
             .map_err(GitCommandError::Spawn)?;
 
+        let stdout = child.stdout.take().expect("stdout is piped");
+        let stderr = child.stderr.take().expect("stderr is piped");
+        let stdout_reader = std::thread::spawn(move || read_pipe(stdout));
+        let stderr_reader = std::thread::spawn(move || read_pipe(stderr));
+
         let deadline = Instant::now() + self.timeout;
         loop {
-            match child.try_wait().map_err(GitCommandError::Wait)? {
-                Some(_) => {
-                    let output = child.wait_with_output().map_err(GitCommandError::Wait)?;
+            match child.try_wait() {
+                Ok(Some(status)) => {
                     return Ok(GitCommandOutput {
-                        status_code: output.status.code(),
-                        stdout: output.stdout,
-                        stderr: output.stderr,
+                        status_code: status.code(),
+                        stdout: collect_pipe(stdout_reader)?,
+                        stderr: collect_pipe(stderr_reader)?,
                     });
                 }
-                None if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                Ok(None) if Instant::now() >= deadline => {
+                    terminate_and_reap(&mut child);
                     return Err(GitCommandError::Timeout);
                 }
-                None => std::thread::sleep(Duration::from_millis(10)),
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                Err(error) => {
+                    terminate_and_reap(&mut child);
+                    return Err(GitCommandError::Wait(error));
+                }
             }
         }
     }
@@ -137,5 +174,44 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, GitCommandError::Timeout));
+    }
+
+    #[test]
+    fn captures_large_stdout_and_stderr_without_timing_out() {
+        let runner = ProcessGitRunner::new(PathBuf::from("/bin/sh"), Duration::from_secs(1));
+        let output = runner
+            .run(
+                std::path::Path::new("/"),
+                &[
+                    OsString::from("-c"),
+                    OsString::from(
+                        "dd if=/dev/zero bs=1048576 count=4 2>/dev/null; \
+                         dd if=/dev/zero bs=1048576 count=4 1>&2 2>/dev/null",
+                    ),
+                ],
+            )
+            .unwrap();
+
+        assert!(output.success());
+        assert_eq!(output.stdout.len(), 4 * 1024 * 1024);
+        assert_eq!(output.stderr.len(), 4 * 1024 * 1024);
+    }
+
+    #[test]
+    fn returns_nonzero_exit_status_with_captured_stderr() {
+        let runner = ProcessGitRunner::new(PathBuf::from("/bin/sh"), Duration::from_secs(1));
+        let output = runner
+            .run(
+                std::path::Path::new("/"),
+                &[
+                    OsString::from("-c"),
+                    OsString::from("printf failure >&2; exit 7"),
+                ],
+            )
+            .unwrap();
+
+        assert!(!output.success());
+        assert_eq!(output.status_code, Some(7));
+        assert_eq!(output.stderr_text_lossy(), "failure");
     }
 }
