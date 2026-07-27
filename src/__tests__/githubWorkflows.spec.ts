@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -56,6 +57,83 @@ function stepNamed(job: WorkflowJob, name: string) {
   expect(step, `${job.name} should contain ${name}`).toBeDefined();
   return step!;
 }
+
+function runBasicAuthHelper(token?: string) {
+  const env = { ...process.env };
+  if (token === undefined) {
+    delete env.GITHUB_TOKEN;
+  } else {
+    env.GITHUB_TOKEN = token;
+  }
+
+  return spawnSync("bash", ["scripts/github-basic-auth.sh"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env,
+  });
+}
+
+describe("GitHub Basic Auth helper", () => {
+  it("keeps the Bash helper on LF line endings for Windows checkouts", () => {
+    const result = spawnSync(
+      "git",
+      ["check-attr", "eol", "--", "scripts/github-basic-auth.sh"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.error).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe(
+      "scripts/github-basic-auth.sh: eol: lf",
+    );
+  });
+
+  it("encodes a long token on one line and round trips the exact credential", () => {
+    const token = `synthetic-${"a".repeat(256)}`;
+
+    const result = runBasicAuthHelper(token);
+
+    expect(result.status).toBe(0);
+    expect(result.error).toBeUndefined();
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toMatch(/[\r\n]/);
+    expect(Buffer.from(result.stdout, "base64").toString("utf8")).toBe(
+      `x-access-token:${token}`,
+    );
+    expect(result.stdout).not.toContain(token);
+  });
+
+  it("rejects missing and empty tokens without printing environment secrets", () => {
+    const secretMarker = `private-${"z".repeat(64)}`;
+    for (const token of [undefined, ""]) {
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        RELEASE_TEST_SECRET: secretMarker,
+      };
+      if (token === undefined) {
+        delete env.GITHUB_TOKEN;
+      } else {
+        env.GITHUB_TOKEN = token;
+      }
+
+      const result = spawnSync("bash", ["scripts/github-basic-auth.sh"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.error).toBeUndefined();
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("GITHUB_TOKEN is required");
+      expect(`${result.stdout}${result.stderr}`).not.toContain(secretMarker);
+    }
+  });
+});
 
 describe("GitHub workflows", () => {
   it("validates frontend and Rust changes on pull requests and main", () => {
@@ -199,6 +277,12 @@ describe("GitHub workflows", () => {
       );
     }
     expect(validation.run).not.toContain("app-v");
+    expect(validation.run).toContain(
+      'authorization="$(scripts/github-basic-auth.sh)"',
+    );
+    expect(validation.run).not.toMatch(
+      /printf[^\n]*GITHUB_TOKEN[^\n]*\|\s*base64/,
+    );
     expect(validation.run).toContain("AUTHORIZATION: basic $authorization");
     expect(validation.run).toContain(
       "fetch --no-tags origin main:refs/remotes/origin/main",
