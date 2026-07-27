@@ -224,6 +224,21 @@ git commit -m "fix: support Windows file identities"
 - Test: `src-tauri/tests/windows_hook_cli.rs`
 - Test: `src-tauri/src/hook_config.rs`
 
+#### Task 2 Review Amendment
+
+The user approved all three Important task-review findings:
+
+- preserve the pre-existing Unix public API with
+  `#[cfg(unix)] pub use unix::socket_path;`;
+- strengthen the rotation test with an observable factory/drop-order probe
+  that fails if the connected server is released before its replacement is
+  created; and
+- derive endpoints through a pure `endpoint_name_for(scope)` boundary, assert
+  its deterministic prefix/hash independently, and let the debug-only CLI
+  integration test inject a unique synthetic endpoint through
+  `CODEX_PULSE_TEST_HOOK_ENDPOINT`. Release builds must ignore the test
+  override.
+
 - [ ] **Step 1: Add the Windows command-quoting regression first**
 
 Extend `hook_config.rs` tests with:
@@ -339,6 +354,9 @@ pub fn start_listener(app: AppHandle) -> anyhow::Result<()> {
     platform::start_listener(app)
 }
 
+#[cfg(unix)]
+pub use unix::socket_path;
+
 #[cfg(windows)]
 #[doc(hidden)]
 pub fn windows_endpoint_name() -> String {
@@ -374,6 +392,10 @@ pub(super) fn endpoint_name() -> String {
     let scope = dirs::data_local_dir()
         .or_else(dirs::data_dir)
         .unwrap_or_else(std::env::temp_dir);
+    endpoint_name_for(&scope)
+}
+
+fn endpoint_name_for(scope: &std::path::Path) -> String {
     let mut hasher = DefaultHasher::new();
     scope.hash(&mut hasher);
     format!(
@@ -382,6 +404,12 @@ pub(super) fn endpoint_name() -> String {
     )
 }
 ```
+
+The debug build may read `CODEX_PULSE_TEST_HOOK_ENDPOINT` before falling back
+to `endpoint_name()`; compile that branch only under `debug_assertions`.
+Production release builds must always use the derived per-user endpoint. The
+integration test sets this variable to a UUID-bearing synthetic pipe and
+binds that exact pipe before starting `CodexPulse.exe __hook`.
 
 Implement a private listener whose first instance is bound synchronously and
 whose `accept` method creates the replacement server before returning:
