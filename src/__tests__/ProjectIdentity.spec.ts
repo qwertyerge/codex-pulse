@@ -1,4 +1,4 @@
-import { mount } from "@vue/test-utils";
+import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ProjectIdentity from "../components/ProjectIdentity.vue";
@@ -6,6 +6,7 @@ import { i18n } from "../i18n";
 import "../styles.css";
 
 const originalInnerHeight = window.innerHeight;
+enableAutoUnmount(afterEach);
 
 const git = {
   projectName: "codex-pulse",
@@ -17,7 +18,6 @@ const git = {
 };
 
 afterEach(() => {
-  document.body.innerHTML = "";
   i18n.global.locale.value = "en";
   Object.defineProperty(window, "innerHeight", {
     configurable: true,
@@ -63,6 +63,25 @@ describe("ProjectIdentity", () => {
     await nextTick();
     popup = document.body.querySelector('[role="tooltip"]') as HTMLElement;
     expect(popup).not.toBeNull();
+  });
+
+  it("keeps the popup open while either focus or hover remains active", async () => {
+    const wrapper = mount(ProjectIdentity, {
+      attachTo: document.body,
+      props: { cwd: "/worktrees/project", git },
+      global: { plugins: [i18n] }
+    });
+    const link = wrapper.get("a.session-card__path");
+
+    await link.trigger("focus");
+    await link.trigger("mouseenter");
+    await link.trigger("mouseleave");
+    await nextTick();
+    expect(document.body.querySelector('[role="tooltip"]')).not.toBeNull();
+
+    await link.trigger("blur");
+    await nextTick();
+    expect(document.body.querySelector('[role="tooltip"]')).toBeNull();
   });
 
   it("distinguishes detached HEAD from a non-Git directory", async () => {

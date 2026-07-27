@@ -12,6 +12,8 @@ const { t } = useI18n();
 const anchor = ref<HTMLElement>();
 const popup = ref<HTMLElement>();
 const popupOpen = ref(false);
+const hovered = ref(false);
+const focused = ref(false);
 const popupId = `project-${useId()}`;
 const placement = ref<"above" | "below">("below");
 const popupStyle = ref<Record<string, string>>({});
@@ -45,15 +47,35 @@ function positionPopup() {
   };
 }
 
-async function showPopup() {
+async function openPopup() {
   if (!props.git) return;
   popupOpen.value = true;
   await nextTick();
   positionPopup();
 }
 
-function hidePopup() {
-  popupOpen.value = false;
+function hidePopupIfInactive() {
+  if (!hovered.value && !focused.value) popupOpen.value = false;
+}
+
+async function handleMouseEnter() {
+  hovered.value = true;
+  await openPopup();
+}
+
+function handleMouseLeave() {
+  hovered.value = false;
+  hidePopupIfInactive();
+}
+
+async function handleFocus() {
+  focused.value = true;
+  await openPopup();
+}
+
+function handleBlur() {
+  focused.value = false;
+  hidePopupIfInactive();
 }
 
 onMounted(() => {
@@ -75,10 +97,10 @@ onBeforeUnmount(() => {
       href="#"
       :aria-describedby="git ? popupId : undefined"
       @click.prevent="$emit('open-project', cwd)"
-      @mouseenter="showPopup"
-      @mouseleave="hidePopup"
-      @focus="showPopup"
-      @blur="hidePopup"
+      @mouseenter="handleMouseEnter"
+      @mouseleave="handleMouseLeave"
+      @focus="handleFocus"
+      @blur="handleBlur"
     >{{ displayedProjectName }}</a>
     <span v-if="git" class="session-card__branch">
       <GitBranch aria-hidden="true" />
