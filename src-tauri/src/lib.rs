@@ -3,6 +3,7 @@ pub mod codex;
 pub mod commands;
 pub mod config;
 pub mod deep_link;
+pub mod file_identity;
 pub mod git;
 pub mod hook;
 pub mod hook_config;

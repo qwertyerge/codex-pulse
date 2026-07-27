@@ -516,6 +516,7 @@ dependencies = [
  "chrono",
  "dirs",
  "rusqlite",
+ "same-file",
  "serde",
  "serde_json",
  "tauri",

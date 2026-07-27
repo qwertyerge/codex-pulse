@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     io::{BufRead, BufReader, Seek, SeekFrom},
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -11,6 +10,7 @@ use anyhow::{anyhow, Result};
 use walkdir::WalkDir;
 
 use crate::codex::jsonl::{parse_line, ParsedRecord, TranscriptEvent};
+use crate::file_identity::FileIdentity;
 use crate::model::{
     LifecycleEvent, LifecycleEventKind, RecentEvent, ThreadMeta, UserMessage, WeeklyQuota,
 };
@@ -207,21 +207,6 @@ fn compact_lifecycle_events(events: &[TranscriptEvent]) -> Vec<TranscriptEvent> 
     compacted
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct FileIdentity {
-    device: u64,
-    inode: u64,
-}
-
-impl FileIdentity {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        }
-    }
-}
-
 struct CachedTranscript {
     identity: FileIdentity,
     modified: SystemTime,
@@ -257,7 +242,7 @@ impl ScanCache {
 
     fn refresh_one(&mut self, path: &Path) -> Result<Option<ParsedTranscript>> {
         let metadata = fs::metadata(path)?;
-        let identity = FileIdentity::from_metadata(&metadata);
+        let identity = FileIdentity::from_path(path, &metadata)?;
         let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
         let length = metadata.len();
 
