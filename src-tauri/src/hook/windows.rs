@@ -1,17 +1,21 @@
-use std::fs::OpenOptions;
+use std::{
+    collections::hash_map::DefaultHasher,
+    fs::OpenOptions,
+    hash::{Hash, Hasher},
+    path::Path,
+};
 
 use tauri::AppHandle;
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
 pub(super) fn endpoint_name() -> String {
-    use std::{
-        collections::hash_map::DefaultHasher,
-        hash::{Hash, Hasher},
-    };
-
     let scope = dirs::data_local_dir()
         .or_else(dirs::data_dir)
         .unwrap_or_else(std::env::temp_dir);
+    endpoint_name_for(&scope)
+}
+
+fn endpoint_name_for(scope: &Path) -> String {
     let mut hasher = DefaultHasher::new();
     scope.hash(&mut hasher);
     format!(
@@ -21,7 +25,7 @@ pub(super) fn endpoint_name() -> String {
 }
 
 pub fn notify_running_instance() {
-    notify_at(&endpoint_name());
+    notify_at(&notification_endpoint_name());
 }
 
 pub fn start_listener(app: AppHandle) -> anyhow::Result<()> {
@@ -34,8 +38,27 @@ pub fn start_listener(app: AppHandle) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn notification_endpoint_name() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(endpoint) = std::env::var("CODEX_PULSE_TEST_HOOK_ENDPOINT") {
+        return endpoint;
+    }
+
+    endpoint_name()
+}
+
 fn notify_at(endpoint: &str) {
     let _ = OpenOptions::new().read(true).write(true).open(endpoint);
+}
+
+fn replace_server_with<T>(
+    server: &mut T,
+    create_replacement: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<()> {
+    let replacement = create_replacement()?;
+    let connected = std::mem::replace(server, replacement);
+    drop(connected);
+    Ok(())
 }
 
 struct PipeListener {
@@ -53,18 +76,67 @@ impl PipeListener {
 
     async fn accept(&mut self) -> std::io::Result<()> {
         self.server.connect().await?;
-        let next = ServerOptions::new().create(&self.endpoint)?;
-        let connected = std::mem::replace(&mut self.server, next);
-        drop(connected);
-        Ok(())
+        replace_server_with(&mut self.server, || {
+            ServerOptions::new().create(&self.endpoint)
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::{
+        cell::RefCell,
+        path::Path,
+        rc::Rc,
+        time::{Duration, SystemTime, UNIX_EPOCH},
+    };
 
-    use super::{notify_at, PipeListener};
+    use super::{endpoint_name_for, notify_at, replace_server_with, PipeListener};
+
+    struct DropProbe {
+        events: Rc<RefCell<Vec<&'static str>>>,
+        event: &'static str,
+    }
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.events.borrow_mut().push(self.event);
+        }
+    }
+
+    #[test]
+    fn derives_a_deterministic_endpoint_from_a_literal_scope() {
+        let endpoint = endpoint_name_for(Path::new("CodexPulseTestScope"));
+
+        assert!(endpoint.starts_with(r"\\.\pipe\com.codexpulse.desktop."));
+        assert_eq!(
+            endpoint,
+            r"\\.\pipe\com.codexpulse.desktop.3555edab93826d28.events"
+        );
+    }
+
+    #[test]
+    fn creates_the_replacement_before_dropping_the_connected_server() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut server = DropProbe {
+            events: events.clone(),
+            event: "drop connected",
+        };
+
+        replace_server_with(&mut server, || {
+            events.borrow_mut().push("create replacement");
+            Ok(DropProbe {
+                events: events.clone(),
+                event: "drop replacement",
+            })
+        })
+        .unwrap();
+
+        assert_eq!(
+            events.borrow().as_slice(),
+            ["create replacement", "drop connected"]
+        );
+    }
 
     #[tokio::test]
     async fn accepts_a_second_connection_on_a_replacement_server_instance() {

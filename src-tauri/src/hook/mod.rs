@@ -20,6 +20,9 @@ pub fn start_listener(app: AppHandle) -> anyhow::Result<()> {
     platform::start_listener(app)
 }
 
+#[cfg(unix)]
+pub use unix::socket_path;
+
 #[cfg(windows)]
 #[doc(hidden)]
 pub fn windows_endpoint_name() -> String {

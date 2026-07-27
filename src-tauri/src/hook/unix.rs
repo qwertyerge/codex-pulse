@@ -69,6 +69,17 @@ mod tests {
     use super::{remove_stale_socket, SOCKET_FILE};
 
     #[test]
+    fn exposes_the_socket_path_through_the_public_hook_api() {
+        let expected = dirs::data_local_dir()
+            .or_else(dirs::data_dir)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("CodexPulse")
+            .join(SOCKET_FILE);
+
+        assert_eq!(crate::hook::socket_path(), expected);
+    }
+
+    #[test]
     fn removes_an_existing_socket_path_before_binding() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(SOCKET_FILE);
