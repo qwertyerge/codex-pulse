@@ -1,0 +1,448 @@
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
+
+use anyhow::{anyhow, Context, Result};
+
+use crate::git::command::{GitCommandOutput, GitRunner};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeIdentity {
+    pub repository_key: String,
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryRecord {
+    pub repository_key: String,
+    pub primary_checkout_path: String,
+    pub project_name: String,
+    pub default_branch: Option<String>,
+    pub default_upstream: Option<String>,
+    pub remote_url: Option<String>,
+    pub updated_at_ms: i64,
+}
+
+pub trait GitMetadataSource {
+    fn resolve_worktree(&self, cwd: &Path) -> Result<Option<WorktreeIdentity>>;
+    fn resolve_repository(
+        &self,
+        cwd: &Path,
+        identity: &WorktreeIdentity,
+        now_ms: i64,
+    ) -> Result<RepositoryRecord>;
+}
+
+pub struct GitRepositoryResolver<R> {
+    runner: R,
+}
+
+impl<R> GitRepositoryResolver<R> {
+    pub fn new(runner: R) -> Self {
+        Self { runner }
+    }
+}
+
+impl<R: GitRunner> GitMetadataSource for GitRepositoryResolver<R> {
+    fn resolve_worktree(&self, cwd: &Path) -> Result<Option<WorktreeIdentity>> {
+        let common_dir = self.run_required(
+            cwd,
+            git_args(
+                cwd,
+                vec![
+                    OsString::from("rev-parse"),
+                    OsString::from("--path-format=absolute"),
+                    OsString::from("--git-common-dir"),
+                ],
+            ),
+        )?;
+        if !common_dir.success() {
+            if common_dir
+                .stderr_text_lossy()
+                .contains("not a git repository")
+            {
+                return Ok(None);
+            }
+            return Err(anyhow!(
+                "could not resolve Git common directory: {}",
+                common_dir.stderr_text_lossy().trim()
+            ));
+        }
+
+        let common_dir = common_dir
+            .stdout_text()
+            .context("Git common directory output is not UTF-8")?;
+        let repository_key = std::fs::canonicalize(common_dir.trim())
+            .context("could not canonicalize Git common directory")?
+            .to_string_lossy()
+            .into_owned();
+
+        let branch = self.run_required(
+            cwd,
+            git_args(
+                cwd,
+                vec![
+                    OsString::from("symbolic-ref"),
+                    OsString::from("--quiet"),
+                    OsString::from("--short"),
+                    OsString::from("HEAD"),
+                ],
+            ),
+        )?;
+        let branch = match branch.status_code {
+            Some(0) => Some(
+                branch
+                    .stdout_text()
+                    .context("Git branch output is not UTF-8")?
+                    .trim()
+                    .to_owned(),
+            ),
+            Some(1) => None,
+            _ => {
+                return Err(anyhow!(
+                    "could not resolve Git branch: {}",
+                    branch.stderr_text_lossy().trim()
+                ));
+            }
+        };
+
+        Ok(Some(WorktreeIdentity {
+            repository_key,
+            branch,
+        }))
+    }
+
+    fn resolve_repository(
+        &self,
+        cwd: &Path,
+        identity: &WorktreeIdentity,
+        now_ms: i64,
+    ) -> Result<RepositoryRecord> {
+        let worktrees = self.run_required(
+            cwd,
+            git_args(
+                cwd,
+                vec![
+                    OsString::from("worktree"),
+                    OsString::from("list"),
+                    OsString::from("--porcelain"),
+                    OsString::from("-z"),
+                ],
+            ),
+        )?;
+        if !worktrees.success() {
+            return Err(anyhow!(
+                "could not list Git worktrees: {}",
+                worktrees.stderr_text_lossy().trim()
+            ));
+        }
+        let primary = parse_worktrees(&worktrees.stdout)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("Git did not report a primary worktree"))?;
+        let project_name = primary
+            .path
+            .file_name()
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| anyhow!("Git primary worktree path has no final component"))?
+            .to_string_lossy()
+            .into_owned();
+        let primary_checkout_path = primary.path.to_string_lossy().into_owned();
+        let default_branch = primary.branch;
+
+        let default_upstream = match default_branch.as_deref() {
+            Some(branch) => self.optional_stdout(
+                &primary.path,
+                git_args(
+                    &primary.path,
+                    vec![
+                        OsString::from("for-each-ref"),
+                        OsString::from("--format=%(upstream:short)"),
+                        OsString::from(format!("refs/heads/{branch}")),
+                    ],
+                ),
+            )?,
+            None => None,
+        };
+        let remote_url = match default_branch.as_deref() {
+            Some(branch) => match self.optional_stdout(
+                &primary.path,
+                git_args(
+                    &primary.path,
+                    vec![
+                        OsString::from("config"),
+                        OsString::from("--get"),
+                        OsString::from(format!("branch.{branch}.remote")),
+                    ],
+                ),
+            )? {
+                Some(remote) => self
+                    .optional_stdout(
+                        &primary.path,
+                        git_args(
+                            &primary.path,
+                            vec![
+                                OsString::from("remote"),
+                                OsString::from("get-url"),
+                                OsString::from(remote),
+                            ],
+                        ),
+                    )?
+                    .and_then(|url| sanitize_remote_url(&url)),
+                None => None,
+            },
+            None => None,
+        };
+
+        Ok(RepositoryRecord {
+            repository_key: identity.repository_key.clone(),
+            primary_checkout_path,
+            project_name,
+            default_branch,
+            default_upstream,
+            remote_url,
+            updated_at_ms: now_ms,
+        })
+    }
+}
+
+impl<R: GitRunner> GitRepositoryResolver<R> {
+    fn run_required(&self, cwd: &Path, args: Vec<OsString>) -> Result<GitCommandOutput> {
+        self.runner.run(cwd, &args).map_err(anyhow::Error::from)
+    }
+
+    fn optional_stdout(&self, cwd: &Path, args: Vec<OsString>) -> Result<Option<String>> {
+        let output = self.run_required(cwd, args)?;
+        if !output.success() {
+            return Ok(None);
+        }
+        let value = output
+            .stdout_text()
+            .context("optional Git metadata output is not UTF-8")?;
+        let value = value.trim();
+        Ok((!value.is_empty()).then(|| value.to_owned()))
+    }
+}
+
+fn git_args(cwd: &Path, command: Vec<OsString>) -> Vec<OsString> {
+    let mut args = vec![OsString::from("-C"), cwd.as_os_str().to_os_string()];
+    args.extend(command);
+    args
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorktreeEntry {
+    path: PathBuf,
+    branch: Option<String>,
+}
+
+fn parse_worktrees(bytes: &[u8]) -> Result<Vec<WorktreeEntry>> {
+    let text = std::str::from_utf8(bytes).map_err(|error| anyhow!(error))?;
+    let mut entries = Vec::new();
+    let mut fields = Vec::new();
+
+    for field in text.split('\0') {
+        if field.is_empty() {
+            if !fields.is_empty() {
+                entries.push(parse_worktree(&fields)?);
+                fields.clear();
+            }
+        } else {
+            fields.push(field);
+        }
+    }
+
+    if !fields.is_empty() {
+        entries.push(parse_worktree(&fields)?);
+    }
+
+    Ok(entries)
+}
+
+fn parse_worktree(fields: &[&str]) -> Result<WorktreeEntry> {
+    let path = fields
+        .first()
+        .and_then(|field| field.strip_prefix("worktree "))
+        .ok_or_else(|| anyhow!("worktree record is missing its path"))?;
+    let branch = fields
+        .iter()
+        .find_map(|field| field.strip_prefix("branch refs/heads/"))
+        .map(str::to_owned);
+
+    Ok(WorktreeEntry {
+        path: PathBuf::from(path),
+        branch,
+    })
+}
+
+pub fn sanitize_remote_url(value: &str) -> Option<String> {
+    let scheme = value.split_once(':').map(|(scheme, _)| scheme);
+    if !matches!(scheme, Some(scheme) if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+    {
+        return Some(value.to_owned());
+    }
+
+    if !has_valid_userinfo_escapes(value) {
+        return None;
+    }
+
+    let mut url = url::Url::parse(value).ok()?;
+    url.set_username("").ok()?;
+    url.set_password(None).ok()?;
+    Some(url.into())
+}
+
+fn has_valid_userinfo_escapes(value: &str) -> bool {
+    let Some(authority) = value.split_once("//").map(|(_, rest)| rest) else {
+        return true;
+    };
+    let authority = authority.split('/').next().unwrap_or(authority);
+    let Some((userinfo, _)) = authority.rsplit_once('@') else {
+        return true;
+    };
+
+    let bytes = userinfo.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+            {
+                return false;
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        ffi::OsString,
+        path::{Path, PathBuf},
+        process::Command,
+        time::Duration,
+    };
+
+    use super::{parse_worktrees, sanitize_remote_url, GitMetadataSource, GitRepositoryResolver};
+    use crate::git::command::ProcessGitRunner;
+
+    #[test]
+    fn parses_primary_and_linked_worktrees() {
+        let bytes = b"worktree /src/project\0HEAD abc\0branch refs/heads/trunk\0\0\
+                      worktree /tmp/project-feature\0HEAD def\0branch refs/heads/feature/git\0\0";
+        let entries = parse_worktrees(bytes).unwrap();
+
+        assert_eq!(entries[0].path, PathBuf::from("/src/project"));
+        assert_eq!(entries[0].branch.as_deref(), Some("trunk"));
+        assert_eq!(entries[1].branch.as_deref(), Some("feature/git"));
+    }
+
+    #[test]
+    fn strips_https_userinfo_and_preserves_scp_ssh() {
+        assert_eq!(
+            sanitize_remote_url("https://user:secret@example.com/acme/project.git").as_deref(),
+            Some("https://example.com/acme/project.git")
+        );
+        assert_eq!(
+            sanitize_remote_url("git@example.com:acme/project.git").as_deref(),
+            Some("git@example.com:acme/project.git")
+        );
+        assert_eq!(
+            sanitize_remote_url("https://%zz@example.com/project.git"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolves_a_linked_worktree_and_its_primary_repository() {
+        let fixture = tempfile::tempdir().unwrap();
+        let fixture_path = std::fs::canonicalize(fixture.path()).unwrap();
+        let primary = fixture_path.join("primary");
+        let linked = fixture_path.join("linked");
+
+        run_git(
+            &fixture_path,
+            &["init", "-b", "trunk", primary.to_str().unwrap()],
+        );
+        run_git(&primary, &["config", "user.name", "Codex Pulse Tests"]);
+        run_git(&primary, &["config", "user.email", "pulse@example.invalid"]);
+        std::fs::write(primary.join("README.md"), "initial\n").unwrap();
+        run_git(&primary, &["add", "README.md"]);
+        run_git(&primary, &["commit", "-m", "initial"]);
+        run_git(
+            &primary,
+            &[
+                "remote",
+                "add",
+                "company",
+                "https://user:secret@example.com/acme/project.git",
+            ],
+        );
+        run_git(
+            &primary,
+            &["update-ref", "refs/remotes/company/trunk", "HEAD"],
+        );
+        run_git(
+            &primary,
+            &["branch", "--set-upstream-to", "company/trunk", "trunk"],
+        );
+        run_git(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "feature/git",
+                linked.to_str().unwrap(),
+            ],
+        );
+
+        let resolver = GitRepositoryResolver {
+            runner: ProcessGitRunner::new(OsString::from("git").into(), Duration::from_secs(1)),
+        };
+        let identity = resolver.resolve_worktree(&linked).unwrap().unwrap();
+        assert_eq!(identity.branch.as_deref(), Some("feature/git"));
+
+        let repository = resolver
+            .resolve_repository(&linked, &identity, 123)
+            .unwrap();
+        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_eq!(repository.project_name, "primary");
+        assert_eq!(repository.default_branch.as_deref(), Some("trunk"));
+        assert_eq!(
+            repository.default_upstream.as_deref(),
+            Some("company/trunk")
+        );
+        assert_eq!(
+            repository.remote_url.as_deref(),
+            Some("https://example.com/acme/project.git")
+        );
+
+        run_git(&linked, &["checkout", "--detach"]);
+        let detached_identity = resolver.resolve_worktree(&linked).unwrap().unwrap();
+        assert_eq!(detached_identity.branch, None);
+
+        let plain_directory = fixture_path.join("plain");
+        std::fs::create_dir(&plain_directory).unwrap();
+        assert!(resolver
+            .resolve_worktree(&plain_directory)
+            .unwrap()
+            .is_none());
+    }
+
+    fn run_git(cwd: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {} failed", args.join(" "));
+    }
+}
