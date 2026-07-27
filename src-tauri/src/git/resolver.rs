@@ -162,6 +162,8 @@ impl<R: GitRunner> GitMetadataSource for GitRepositoryResolver<R> {
                         OsString::from(format!("refs/heads/{branch}")),
                     ],
                 ),
+                &[],
+                "for-each-ref",
             )?,
             None => None,
         };
@@ -176,6 +178,8 @@ impl<R: GitRunner> GitMetadataSource for GitRepositoryResolver<R> {
                         OsString::from(format!("branch.{branch}.remote")),
                     ],
                 ),
+                &[1],
+                "config --get branch.<default>.remote",
             )? {
                 Some(remote) => self
                     .optional_stdout(
@@ -188,6 +192,8 @@ impl<R: GitRunner> GitMetadataSource for GitRepositoryResolver<R> {
                                 OsString::from(remote),
                             ],
                         ),
+                        &[2],
+                        "remote get-url",
                     )?
                     .and_then(|url| sanitize_remote_url(&url)),
                 None => None,
@@ -212,10 +218,22 @@ impl<R: GitRunner> GitRepositoryResolver<R> {
         self.runner.run(cwd, &args).map_err(anyhow::Error::from)
     }
 
-    fn optional_stdout(&self, cwd: &Path, args: Vec<OsString>) -> Result<Option<String>> {
+    fn optional_stdout(
+        &self,
+        cwd: &Path,
+        args: Vec<OsString>,
+        missing_statuses: &[i32],
+        command: &str,
+    ) -> Result<Option<String>> {
         let output = self.run_required(cwd, args)?;
         if !output.success() {
-            return Ok(None);
+            if matches!(output.status_code, Some(status) if missing_statuses.contains(&status)) {
+                return Ok(None);
+            }
+            return Err(anyhow!(
+                "could not resolve optional Git metadata with {command}: {}",
+                output.stderr_text_lossy().trim()
+            ));
         }
         let value = output
             .stdout_text()
@@ -265,10 +283,19 @@ fn parse_worktree(fields: &[&str]) -> Result<WorktreeEntry> {
         .first()
         .and_then(|field| field.strip_prefix("worktree "))
         .ok_or_else(|| anyhow!("worktree record is missing its path"))?;
-    let branch = fields
+    let branch = match fields
         .iter()
-        .find_map(|field| field.strip_prefix("branch refs/heads/"))
-        .map(str::to_owned);
+        .find_map(|field| field.strip_prefix("branch "))
+    {
+        Some(reference) => Some(
+            reference
+                .strip_prefix("refs/heads/")
+                .filter(|branch| !branch.is_empty())
+                .ok_or_else(|| anyhow!("worktree record has an invalid branch reference"))?
+                .to_owned(),
+        ),
+        None => None,
+    };
 
     Ok(WorktreeEntry {
         path: PathBuf::from(path),
@@ -324,6 +351,8 @@ fn has_valid_userinfo_escapes(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::{
+        cell::RefCell,
+        collections::VecDeque,
         ffi::OsString,
         path::{Path, PathBuf},
         process::Command,
@@ -331,7 +360,7 @@ mod tests {
     };
 
     use super::{parse_worktrees, sanitize_remote_url, GitMetadataSource, GitRepositoryResolver};
-    use crate::git::command::ProcessGitRunner;
+    use crate::git::command::{GitCommandError, GitCommandOutput, GitRunner, ProcessGitRunner};
 
     #[test]
     fn parses_primary_and_linked_worktrees() {
@@ -358,6 +387,41 @@ mod tests {
             sanitize_remote_url("https://%zz@example.com/project.git"),
             None
         );
+    }
+
+    #[test]
+    fn rejects_malformed_porcelain_branch_fields() {
+        for branch in ["refs/tags/v1", "refs/heads/"] {
+            let bytes = format!("worktree /src/project\0HEAD abc\0branch {branch}\0\0");
+            assert!(parse_worktrees(bytes.as_bytes()).is_err());
+        }
+    }
+
+    #[test]
+    fn returns_an_error_for_unexpected_optional_git_failures() {
+        let resolver = GitRepositoryResolver::new(ScriptedGitRunner::new(vec![
+            git_output(
+                Some(0),
+                b"worktree /src/project\0HEAD abc\0branch refs/heads/trunk\0\0".to_vec(),
+                Vec::new(),
+            ),
+            git_output(
+                Some(128),
+                Vec::new(),
+                b"fatal: corrupt configuration".to_vec(),
+            ),
+            git_output(Some(1), Vec::new(), Vec::new()),
+        ]));
+        let identity = super::WorktreeIdentity {
+            repository_key: "repository".to_owned(),
+            branch: Some("feature/git".to_owned()),
+        };
+
+        let error = resolver
+            .resolve_repository(Path::new("/src/project"), &identity, 123)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("for-each-ref"));
     }
 
     #[test]
@@ -444,5 +508,39 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success(), "git {} failed", args.join(" "));
+    }
+
+    struct ScriptedGitRunner {
+        outputs: RefCell<VecDeque<GitCommandOutput>>,
+    }
+
+    impl ScriptedGitRunner {
+        fn new(outputs: Vec<GitCommandOutput>) -> Self {
+            Self {
+                outputs: RefCell::new(outputs.into()),
+            }
+        }
+    }
+
+    impl GitRunner for ScriptedGitRunner {
+        fn run(
+            &self,
+            _cwd: &Path,
+            _args: &[OsString],
+        ) -> Result<GitCommandOutput, GitCommandError> {
+            Ok(self
+                .outputs
+                .borrow_mut()
+                .pop_front()
+                .expect("scripted Git output is available"))
+        }
+    }
+
+    fn git_output(status_code: Option<i32>, stdout: Vec<u8>, stderr: Vec<u8>) -> GitCommandOutput {
+        GitCommandOutput {
+            status_code,
+            stdout,
+            stderr,
+        }
     }
 }
