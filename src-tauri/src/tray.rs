@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, Manager,
 };
 
@@ -17,6 +17,13 @@ const QUIT_ID: &str = "quit";
 
 fn tray_icon_is_template() -> bool {
     cfg!(target_os = "macos")
+}
+
+fn should_show_main_window_on_tray_click(
+    button: MouseButton,
+    button_state: MouseButtonState,
+) -> bool {
+    button == MouseButton::Left && button_state == MouseButtonState::Up
 }
 
 /// Keeps the reference-counted tray icon alive for the life of the app.
@@ -48,8 +55,15 @@ pub fn setup(app: &App) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if matches!(event, tauri::tray::TrayIconEvent::Click { .. }) {
-                show_main_window(tray.app_handle());
+            if let TrayIconEvent::Click {
+                button,
+                button_state,
+                ..
+            } = event
+            {
+                if should_show_main_window_on_tray_click(button, button_state) {
+                    show_main_window(tray.app_handle());
+                }
             }
         })
         .build(app)?;
@@ -68,7 +82,11 @@ pub fn show_main_window(app: &tauri::AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::{tray_icon_is_template, QUIT_ID, SHOW_ID, TRAY_ICON_BYTES};
+    use super::{
+        should_show_main_window_on_tray_click, tray_icon_is_template, QUIT_ID, SHOW_ID,
+        TRAY_ICON_BYTES,
+    };
+    use tauri::tray::{MouseButton, MouseButtonState};
 
     #[test]
     fn tray_actions_have_stable_ids() {
@@ -80,5 +98,29 @@ mod tests {
     fn tray_icon_uses_the_platform_appropriate_asset() {
         assert_eq!(tray_icon_is_template(), cfg!(target_os = "macos"));
         assert!(tauri::image::Image::from_bytes(TRAY_ICON_BYTES).is_ok());
+    }
+
+    #[test]
+    fn left_button_release_shows_the_main_window_once() {
+        assert!(!should_show_main_window_on_tray_click(
+            MouseButton::Left,
+            MouseButtonState::Down,
+        ));
+        assert!(should_show_main_window_on_tray_click(
+            MouseButton::Left,
+            MouseButtonState::Up,
+        ));
+    }
+
+    #[test]
+    fn right_click_is_reserved_for_the_native_context_menu() {
+        assert!(!should_show_main_window_on_tray_click(
+            MouseButton::Right,
+            MouseButtonState::Down,
+        ));
+        assert!(!should_show_main_window_on_tray_click(
+            MouseButton::Right,
+            MouseButtonState::Up,
+        ));
     }
 }
