@@ -212,22 +212,65 @@ impl GitRunner for ProcessGitRunner {
 #[cfg(test)]
 mod tests {
     use std::{
+        env,
         ffi::OsString,
-        path::PathBuf,
-        sync::mpsc,
+        path::{Path, PathBuf},
+        process::Command,
+        sync::{mpsc, OnceLock},
         time::{Duration, Instant},
     };
 
     use super::{GitCommandError, GitRunner, ProcessGitRunner};
 
+    struct ProcessFixture {
+        _directory: tempfile::TempDir,
+        executable: PathBuf,
+    }
+
+    fn process_fixture() -> &'static Path {
+        static FIXTURE: OnceLock<ProcessFixture> = OnceLock::new();
+
+        &FIXTURE
+            .get_or_init(|| {
+                let directory = tempfile::tempdir().unwrap();
+                let executable = directory.path().join(format!(
+                    "process-git-runner-fixture{}",
+                    env::consts::EXE_SUFFIX
+                ));
+                let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures/process_git_runner.rs");
+                let rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+                let output = Command::new(rustc)
+                    .arg(source)
+                    .arg("-o")
+                    .arg(&executable)
+                    .output()
+                    .expect("process fixture compiler starts");
+                assert!(
+                    output.status.success(),
+                    "process fixture compiles: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+
+                ProcessFixture {
+                    _directory: directory,
+                    executable,
+                }
+            })
+            .executable
+    }
+
+    fn fixture_runner(timeout: Duration) -> ProcessGitRunner {
+        ProcessGitRunner::new(process_fixture().to_path_buf(), timeout)
+    }
+
     #[test]
     fn captures_a_successful_process_without_a_shell() {
-        let runner =
-            ProcessGitRunner::new(PathBuf::from("/usr/bin/printf"), Duration::from_secs(1));
+        let runner = fixture_runner(Duration::from_secs(1));
         let output = runner
             .run(
-                std::path::Path::new("/"),
-                &[OsString::from("%s"), OsString::from("git-output")],
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                &[OsString::from("print")],
             )
             .unwrap();
 
@@ -237,9 +280,12 @@ mod tests {
 
     #[test]
     fn kills_a_process_after_the_deadline() {
-        let runner = ProcessGitRunner::new(PathBuf::from("/bin/sleep"), Duration::from_millis(20));
+        let runner = fixture_runner(Duration::from_millis(20));
         let error = runner
-            .run(std::path::Path::new("/"), &[OsString::from("1")])
+            .run(
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                &[OsString::from("sleep")],
+            )
             .unwrap_err();
 
         assert!(matches!(error, GitCommandError::Timeout));
@@ -251,22 +297,15 @@ mod tests {
         let completion_marker = fixture.path().join("completed");
         let (reaper_completed_tx, reaper_completed_rx) = mpsc::sync_channel(1);
         let runner = ProcessGitRunner {
-            executable: PathBuf::from("/bin/sh"),
+            executable: process_fixture().to_path_buf(),
             timeout: Duration::from_millis(20),
             reap_timeout: Duration::ZERO,
             reaper_completed_tx: Some(reaper_completed_tx),
         };
-        let script = format!(
-            "sleep 0.4; printf completed > {}",
-            completion_marker.to_string_lossy()
-        );
 
         let started_at = Instant::now();
         let error = runner
-            .run(
-                std::path::Path::new("/"),
-                &[OsString::from("-c"), OsString::from(script)],
-            )
+            .run(fixture.path(), &[OsString::from("spawn-sleeper-then-mark")])
             .unwrap_err();
         let returned_after = started_at.elapsed();
 
@@ -284,17 +323,11 @@ mod tests {
 
     #[test]
     fn captures_large_stdout_and_stderr_without_timing_out() {
-        let runner = ProcessGitRunner::new(PathBuf::from("/bin/sh"), Duration::from_secs(1));
+        let runner = fixture_runner(Duration::from_secs(1));
         let output = runner
             .run(
-                std::path::Path::new("/"),
-                &[
-                    OsString::from("-c"),
-                    OsString::from(
-                        "dd if=/dev/zero bs=1048576 count=4 2>/dev/null; \
-                         dd if=/dev/zero bs=1048576 count=4 1>&2 2>/dev/null",
-                    ),
-                ],
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                &[OsString::from("large-output")],
             )
             .unwrap();
 
@@ -305,14 +338,11 @@ mod tests {
 
     #[test]
     fn returns_nonzero_exit_status_with_captured_stderr() {
-        let runner = ProcessGitRunner::new(PathBuf::from("/bin/sh"), Duration::from_secs(1));
+        let runner = fixture_runner(Duration::from_secs(1));
         let output = runner
             .run(
-                std::path::Path::new("/"),
-                &[
-                    OsString::from("-c"),
-                    OsString::from("printf failure >&2; exit 7"),
-                ],
+                Path::new(env!("CARGO_MANIFEST_DIR")),
+                &[OsString::from("fail")],
             )
             .unwrap();
 
