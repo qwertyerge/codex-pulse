@@ -10,4 +10,4 @@ Open a [public GitHub issue](https://github.com/qwertyerge/codex-pulse/issues/ne
 
 Before submitting, remove all local Codex transcripts, tokens, credentials, signing material, complete `hooks.json` content, private repository names, and user-specific paths. Do not attach raw session data. Replace sensitive values with stable placeholders and include only the minimum sanitized diagnostic detail needed to reproduce the problem.
 
-Describe the affected version, macOS version and architecture, impact, reproduction steps, and any mitigation you have already tested. A maintainer will triage the issue in public and may ask for a safer reduced reproduction.
+Describe the affected Codex Pulse version, operating system and version, architecture, Codex environment (native macOS, native Windows, WSL, or other), impact, reproduction steps, and any mitigation you have already tested. Selecting WSL helps triage the report; it does not make WSL a supported environment. A maintainer will triage the issue in public and may ask for a safer reduced reproduction.
