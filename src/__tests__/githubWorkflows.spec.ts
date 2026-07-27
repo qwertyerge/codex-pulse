@@ -52,7 +52,11 @@ describe("GitHub workflows", () => {
       push: { branches: ["main"] },
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
-    expect(Object.keys(workflow.jobs)).toEqual(["frontend", "rust"]);
+    expect(Object.keys(workflow.jobs)).toEqual([
+      "frontend",
+      "rust",
+      "rust_windows",
+    ]);
 
     const frontend = workflow.jobs.frontend;
     expect(frontend.name).toBe("Frontend");
@@ -83,6 +87,36 @@ describe("GitHub workflows", () => {
     stepUsing(rust, "Swatinem/rust-cache@v2");
     expect(rust.steps.map((step) => step.run).filter(Boolean)).toEqual([
       "cargo test --manifest-path src-tauri/Cargo.toml",
+    ]);
+
+    const rustWindows = workflow.jobs.rust_windows;
+    expect(rustWindows.name).toBe("Rust (Windows)");
+    expect(rustWindows["runs-on"]).toBe("windows-latest");
+    expect(stepUsing(rustWindows, "actions/checkout@v7").with).toEqual({
+      "persist-credentials": false,
+    });
+    expect(stepUsing(rustWindows, "pnpm/action-setup@v6").with).toEqual({
+      version: "10.33.0",
+    });
+    expect(
+      stepUsing(rustWindows, "actions/setup-node@v7").with,
+    ).toMatchObject({
+      "node-version": 24,
+      cache: "pnpm",
+    });
+    expect(
+      stepUsing(rustWindows, "dtolnay/rust-toolchain@stable").with,
+    ).toEqual({
+      targets: "x86_64-pc-windows-msvc",
+    });
+    stepUsing(rustWindows, "Swatinem/rust-cache@v2");
+    expect(rustWindows.steps.map((step) => step.run).filter(Boolean)).toEqual([
+      "pnpm install --frozen-lockfile",
+      "pnpm test",
+      "pnpm build",
+      "cargo test --manifest-path src-tauri/Cargo.toml",
+      "pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis",
+      "pwsh -NoProfile -File scripts/verify-windows-package.ps1 -BundleDirectory src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis",
     ]);
   });
 
