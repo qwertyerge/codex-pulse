@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
 pub(super) fn endpoint_name() -> String {
@@ -31,11 +31,42 @@ pub fn notify_running_instance() {
 pub fn start_listener(app: AppHandle) -> anyhow::Result<()> {
     let mut listener = PipeListener::bind_at(endpoint_name())?;
     tauri::async_runtime::spawn(async move {
-        while listener.accept().await.is_ok() {
-            crate::commands::schedule_refresh(app.clone());
-        }
+        let app_for_refresh = app.clone();
+        run_listener_loop(
+            &mut listener,
+            move || crate::commands::schedule_refresh(app_for_refresh.clone()),
+            move |error| report_listener_failure(&app, error),
+        )
+        .await;
     });
     Ok(())
+}
+
+trait HookListener {
+    async fn accept(&mut self) -> std::io::Result<()>;
+}
+
+async fn run_listener_loop<L, N, F>(listener: &mut L, mut on_notification: N, mut on_failure: F)
+where
+    L: HookListener,
+    N: FnMut(),
+    F: FnMut(std::io::Error),
+{
+    loop {
+        match listener.accept().await {
+            Ok(()) => on_notification(),
+            Err(error) => {
+                on_failure(error);
+                break;
+            }
+        }
+    }
+}
+
+fn report_listener_failure(app: &AppHandle, error: std::io::Error) {
+    app.state::<crate::commands::AppState>()
+        .set_monitoring_degraded_reason(format!("Live hook listener stopped: {error}"));
+    let _ = app.emit(crate::hook::SESSIONS_CHANGED_EVENT, ());
 }
 
 fn notification_endpoint_name() -> String {
@@ -82,16 +113,39 @@ impl PipeListener {
     }
 }
 
+impl HookListener for PipeListener {
+    async fn accept(&mut self) -> std::io::Result<()> {
+        PipeListener::accept(self).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
         cell::RefCell,
+        collections::VecDeque,
+        io,
         path::Path,
         rc::Rc,
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
-    use super::{endpoint_name_for, notify_at, replace_server_with, PipeListener};
+    use super::{
+        endpoint_name_for, notify_at, replace_server_with, run_listener_loop, HookListener,
+        PipeListener,
+    };
+
+    struct InjectedListener {
+        results: VecDeque<io::Result<()>>,
+    }
+
+    impl HookListener for InjectedListener {
+        async fn accept(&mut self) -> io::Result<()> {
+            self.results
+                .pop_front()
+                .expect("the loop should stop after the injected failure")
+        }
+    }
 
     struct DropProbe {
         events: Rc<RefCell<Vec<&'static str>>>,
@@ -161,5 +215,30 @@ mod tests {
             .await
             .expect("replacement server should accept within five seconds")
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn reports_a_terminal_failure_after_the_listener_has_accepted_a_notification() {
+        let mut listener = InjectedListener {
+            results: VecDeque::from([
+                Ok(()),
+                Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "replacement instance failed",
+                )),
+            ]),
+        };
+        let mut notifications = 0;
+        let mut failures = Vec::new();
+
+        run_listener_loop(
+            &mut listener,
+            || notifications += 1,
+            |error| failures.push(error.to_string()),
+        )
+        .await;
+
+        assert_eq!(notifications, 1);
+        assert_eq!(failures, ["replacement instance failed"]);
     }
 }
