@@ -30,6 +30,7 @@ pub struct AppState {
     pub codex_home: PathBuf,
     pub store: ConfigStore,
     pub config: Mutex<AppConfig>,
+    monitoring_degraded_reason: RwLock<Option<String>>,
     cached_snapshot: RwLock<CachedSnapshot>,
     scan_cache: Mutex<ScanCache>,
     git_enricher: Mutex<GitSessionEnricher<GitRepositoryResolver<ProcessGitRunner>>>,
@@ -70,6 +71,7 @@ impl AppState {
             codex_home,
             store,
             config: Mutex::new(config),
+            monitoring_degraded_reason: RwLock::new(None),
             cached_snapshot: RwLock::new(CachedSnapshot::default()),
             scan_cache: Mutex::new(ScanCache::default()),
             git_enricher: Mutex::new(GitSessionEnricher::new(resolver, cache)),
@@ -88,6 +90,19 @@ impl AppState {
         let store = ConfigStore::for_user();
         Self::new(codex_home.clone(), store.clone())
             .unwrap_or_else(|_| Self::with_config(codex_home, store, AppConfig::default()))
+    }
+
+    pub fn set_monitoring_degraded_reason(&self, reason: String) {
+        if let Ok(mut current) = self.monitoring_degraded_reason.write() {
+            *current = Some(reason);
+        }
+    }
+
+    fn monitoring_degraded_reason(&self) -> Option<String> {
+        self.monitoring_degraded_reason
+            .read()
+            .ok()
+            .and_then(|current| current.clone())
     }
 
     fn cached_snapshot(&self) -> (Vec<SessionSnapshot>, Option<WeeklyQuota>) {
@@ -242,6 +257,10 @@ pub fn set_locale(locale: LocaleMode, state: State<'_, AppState>) -> Result<Loca
 
 #[tauri::command]
 pub fn get_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
+    snapshot_for_state(&state)
+}
+
+fn snapshot_for_state(state: &AppState) -> Result<AppSnapshot, String> {
     let (sessions, weekly_quota) = state.cached_snapshot();
     let mut snapshot = AppSnapshot {
         sessions,
@@ -270,6 +289,7 @@ pub fn get_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     let hooks_installed = crate::hook_config::is_installed(&state.codex_home);
     snapshot.monitoring.enabled = config.monitoring_enabled && hooks_installed;
     snapshot.monitoring.needs_repair = config.monitoring_enabled && !hooks_installed;
+    snapshot.monitoring.degraded_reason = state.monitoring_degraded_reason();
     Ok(snapshot)
 }
 
@@ -593,6 +613,24 @@ mod tests {
 
     #[test]
     fn fallback_reconciliation_is_limited_to_one_minute() {
+        assert_eq!(FALLBACK_RECONCILIATION_SECONDS, 60);
+    }
+
+    #[test]
+    fn listener_failure_is_exposed_without_disabling_fallback_monitoring() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::new(
+            temp.path().to_owned(),
+            ConfigStore::new(temp.path().join("config.json")),
+        )
+        .unwrap();
+
+        state.set_monitoring_degraded_reason("Live hook listener unavailable: pipe is busy".into());
+        let snapshot = super::snapshot_for_state(&state).unwrap();
+        assert_eq!(
+            snapshot.monitoring.degraded_reason.as_deref(),
+            Some("Live hook listener unavailable: pipe is busy")
+        );
         assert_eq!(FALLBACK_RECONCILIATION_SECONDS, 60);
     }
 

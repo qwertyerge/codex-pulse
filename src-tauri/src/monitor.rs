@@ -2,7 +2,6 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     io::{BufRead, BufReader, Seek, SeekFrom},
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime},
 };
@@ -14,6 +13,7 @@ use crate::codex::discovery::{discover_recent_jsonl_files, ScanCache};
 use crate::codex::jsonl::{parse_line, ParsedRecord};
 use crate::codex::session_index::lookup_thread_names;
 use crate::codex::title::{lookup_titles, recent_thread_paths};
+use crate::file_identity::FileIdentity;
 use crate::model::{ResolvedTitle, SessionSnapshot, WeeklyQuota};
 use crate::registry::SessionRegistry;
 
@@ -41,23 +41,8 @@ pub struct QuotaSourceCache {
     last_discovery_at: Option<Instant>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
-struct QuotaFileIdentity {
-    device: u64,
-    inode: u64,
-}
-
-impl QuotaFileIdentity {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        Self {
-            device: metadata.dev(),
-            inode: metadata.ino(),
-        }
-    }
-}
-
 struct CachedQuotaSource {
-    identity: QuotaFileIdentity,
+    identity: FileIdentity,
     modified: SystemTime,
     length: u64,
     processed_line_count: u64,
@@ -98,7 +83,7 @@ impl QuotaSourceCache {
 
     fn refresh_one(&mut self, path: &Path) -> Result<()> {
         let metadata = fs::metadata(path)?;
-        let identity = QuotaFileIdentity::from_metadata(&metadata);
+        let identity = FileIdentity::from_path(path, &metadata)?;
         let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         let length = metadata.len();
 
@@ -140,7 +125,7 @@ impl QuotaSourceCache {
 impl CachedQuotaSource {
     fn read_tail(
         path: &Path,
-        identity: QuotaFileIdentity,
+        identity: FileIdentity,
         modified: SystemTime,
         length: u64,
     ) -> Result<Self> {

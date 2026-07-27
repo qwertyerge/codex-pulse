@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(repository.default_branch.as_deref(), Some("trunk"));
         assert_eq!(repository.default_upstream, None);
         assert_eq!(repository.remote_url, None);
-        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_same_path(&repository.primary_checkout_path, &primary);
         assert_eq!(repository.project_name, "primary");
     }
 
@@ -516,7 +516,7 @@ mod tests {
             Some("missing/trunk")
         );
         assert_eq!(repository.remote_url, None);
-        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_same_path(&repository.primary_checkout_path, &primary);
         assert_eq!(repository.project_name, "primary");
     }
 
@@ -545,14 +545,14 @@ mod tests {
             Some("company/trunk")
         );
         assert_eq!(repository.remote_url, None);
-        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_same_path(&repository.primary_checkout_path, &primary);
         assert_eq!(repository.project_name, "primary");
     }
 
     #[test]
     fn resolves_a_linked_worktree_and_its_primary_repository() {
         let fixture = tempfile::tempdir().unwrap();
-        let fixture_path = std::fs::canonicalize(fixture.path()).unwrap();
+        let fixture_path = git_fixture_path(&fixture);
         let primary = fixture_path.join("primary");
         let linked = fixture_path.join("linked");
 
@@ -602,7 +602,7 @@ mod tests {
         let repository = resolver
             .resolve_repository(&linked, &identity, 123)
             .unwrap();
-        assert_eq!(repository.primary_checkout_path, primary.to_string_lossy());
+        assert_same_path(&repository.primary_checkout_path, &primary);
         assert_eq!(repository.project_name, "primary");
         assert_eq!(repository.default_branch.as_deref(), Some("trunk"));
         assert_eq!(
@@ -628,7 +628,7 @@ mod tests {
 
     fn initialized_repository() -> (tempfile::TempDir, PathBuf) {
         let fixture = tempfile::tempdir().unwrap();
-        let fixture_path = std::fs::canonicalize(fixture.path()).unwrap();
+        let fixture_path = git_fixture_path(&fixture);
         let primary = fixture_path.join("primary");
         run_git(
             &fixture_path,
@@ -638,6 +638,25 @@ mod tests {
         run_git(&primary, &["config", "user.email", "pulse@example.invalid"]);
         run_git(&primary, &["commit", "--allow-empty", "-m", "initial"]);
         (fixture, primary)
+    }
+
+    fn git_fixture_path(fixture: &tempfile::TempDir) -> PathBuf {
+        #[cfg(windows)]
+        {
+            // Git for Windows rejects the verbatim `\\?\` path returned by canonicalize.
+            fixture.path().to_path_buf()
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::canonicalize(fixture.path()).unwrap()
+        }
+    }
+
+    fn assert_same_path(actual: &str, expected: &Path) {
+        assert_eq!(
+            std::fs::canonicalize(actual).unwrap(),
+            std::fs::canonicalize(expected).unwrap()
+        );
     }
 
     fn resolve_repository(primary: &Path) -> super::RepositoryRecord {

@@ -13,9 +13,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release
-    runs-on: macos-15
+  guard:
+    name: Guard release source
+    runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -28,7 +28,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          app_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          package_version="$(jq -r '.version' package.json)"
+          tauri_version="$(jq -r '.version' src-tauri/tauri.conf.json)"
+          cargo_version="$(sed -n '/^\[package\]/,/^\[/s/^version = \"\([^\"]*\)\"/\1/p' src-tauri/Cargo.toml | head -n 1)"
           semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$'
 
           if [[ ! "$GITHUB_REF_NAME" =~ $semver_pattern ]]; then
@@ -36,10 +38,10 @@ jobs:
             exit 1
           fi
 
-          expected_tag="$app_version"
-
-          if [[ "$GITHUB_REF_NAME" != "$expected_tag" ]]; then
-            echo "Tag $GITHUB_REF_NAME does not match $expected_tag" >&2
+          if [[ "$package_version" != "$GITHUB_REF_NAME" ||
+                "$tauri_version" != "$GITHUB_REF_NAME" ||
+                "$cargo_version" != "$GITHUB_REF_NAME" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match package ($package_version), Tauri ($tauri_version), and Cargo ($cargo_version) versions" >&2
             exit 1
           fi
 
@@ -51,6 +53,30 @@ jobs:
             exit 1
           fi
 
+  release:
+    name: Release (${{ matrix.label }})
+    runs-on: ${{ matrix.platform }}
+    needs: guard
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - label: macOS ARM64
+            platform: macos-15
+            target: aarch64-apple-darwin
+            bundles: dmg
+            apple-signing-identity: "-"
+          - label: Windows x64
+            platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            apple-signing-identity: ""
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Install pnpm
         uses: pnpm/action-setup@v6
         with:
@@ -64,7 +90,7 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
@@ -80,7 +106,7 @@ jobs:
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: "-"
+          APPLE_SIGNING_IDENTITY: ${{ matrix.apple-signing-identity }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Codex Pulse __VERSION__"
@@ -89,4 +115,4 @@ jobs:
           releaseDraft: true
           prerelease: false
           uploadUpdaterJson: false
-          args: "--target aarch64-apple-darwin --bundles dmg"
+          args: "--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}"

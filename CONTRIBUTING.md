@@ -11,7 +11,7 @@ Thanks for helping improve Codex Pulse. Keep changes focused, testable, and safe
 
 ## Development Setup
 
-You need macOS with the Tauri prerequisites, Node.js, pnpm, and a Rust toolchain.
+You need either macOS ARM64 or Windows 11 x64 with the matching Tauri prerequisites, Node.js, pnpm, and a Rust toolchain. Windows development targets native Codex; WSL is useful for issue triage but is not a supported runtime.
 
 ```bash
 pnpm install
@@ -38,9 +38,17 @@ pnpm build
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
+For a Windows NSIS build, run this command from PowerShell:
+
+```powershell
+pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
+```
+
+The pull-request workflow defines the `Frontend`, `Rust`, and `Rust (Windows)` checks. A checked-in workflow is not proof that a native Windows runner has passed; include the actual run URL and result when reporting Windows verification.
+
 ## Pull Requests
 
-Explain the user-visible behavior, link related issues, and list the commands you ran. Include before-and-after screenshots for visual changes. A pull request must pass the required `Frontend` and `Rust` checks before it can merge.
+Explain the user-visible behavior, link related issues, and list the commands you ran. Include before-and-after screenshots for visual changes. A pull request must pass the `Frontend`, `Rust`, and `Rust (Windows)` workflow checks before it can merge.
 
 ## Privacy and Security
 

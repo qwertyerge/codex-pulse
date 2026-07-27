@@ -55,3 +55,42 @@ jobs:
           workspaces: ./src-tauri -> target
       - name: Test Rust backend
         run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  rust_windows:
+    name: Rust (Windows)
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10.33.0
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Test frontend
+        run: pnpm test
+      - name: Build frontend
+        run: pnpm build
+      - name: Test Rust backend
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: Build NSIS package
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
+      - name: Verify Windows package
+        run: pwsh -NoProfile -File scripts/verify-windows-package.ps1 -BundleDirectory src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis

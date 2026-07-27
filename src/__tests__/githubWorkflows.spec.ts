@@ -6,6 +6,7 @@ import { parse } from "yaml";
 interface WorkflowStep {
   name?: string;
   uses?: string;
+  shell?: string;
   run?: string;
   env?: Record<string, string>;
   with?: Record<string, unknown>;
@@ -14,6 +15,20 @@ interface WorkflowStep {
 interface WorkflowJob {
   name: string;
   "runs-on": string;
+  needs?: string;
+  strategy?: {
+    "fail-fast": boolean;
+    "max-parallel"?: number;
+    matrix: {
+      include: Array<{
+        label: string;
+        platform: string;
+        target: string;
+        bundles: string;
+        "apple-signing-identity": string;
+      }>;
+    };
+  };
   steps: WorkflowStep[];
 }
 
@@ -52,7 +67,11 @@ describe("GitHub workflows", () => {
       push: { branches: ["main"] },
     });
     expect(workflow.permissions).toEqual({ contents: "read" });
-    expect(Object.keys(workflow.jobs)).toEqual(["frontend", "rust"]);
+    expect(Object.keys(workflow.jobs)).toEqual([
+      "frontend",
+      "rust",
+      "rust_windows",
+    ]);
 
     const frontend = workflow.jobs.frontend;
     expect(frontend.name).toBe("Frontend");
@@ -84,9 +103,39 @@ describe("GitHub workflows", () => {
     expect(rust.steps.map((step) => step.run).filter(Boolean)).toEqual([
       "cargo test --manifest-path src-tauri/Cargo.toml",
     ]);
+
+    const rustWindows = workflow.jobs.rust_windows;
+    expect(rustWindows.name).toBe("Rust (Windows)");
+    expect(rustWindows["runs-on"]).toBe("windows-latest");
+    expect(stepUsing(rustWindows, "actions/checkout@v7").with).toEqual({
+      "persist-credentials": false,
+    });
+    expect(stepUsing(rustWindows, "pnpm/action-setup@v6").with).toEqual({
+      version: "10.33.0",
+    });
+    expect(
+      stepUsing(rustWindows, "actions/setup-node@v7").with,
+    ).toMatchObject({
+      "node-version": 24,
+      cache: "pnpm",
+    });
+    expect(
+      stepUsing(rustWindows, "dtolnay/rust-toolchain@stable").with,
+    ).toEqual({
+      targets: "x86_64-pc-windows-msvc",
+    });
+    stepUsing(rustWindows, "Swatinem/rust-cache@v2");
+    expect(rustWindows.steps.map((step) => step.run).filter(Boolean)).toEqual([
+      "pnpm install --frozen-lockfile",
+      "pnpm test",
+      "pnpm build",
+      "cargo test --manifest-path src-tauri/Cargo.toml",
+      "pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis",
+      "pwsh -NoProfile -File scripts/verify-windows-package.ps1 -BundleDirectory src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis",
+    ]);
   });
 
-  it("creates only a guarded ARM64 draft release from a SemVer tag", () => {
+  it("creates guarded macOS and Windows draft artifacts from a SemVer tag", () => {
     const workflow = readWorkflow("release.yml");
 
     expect(workflow.name).toBe("Release");
@@ -94,17 +143,19 @@ describe("GitHub workflows", () => {
       push: { tags: ["[0-9]*.[0-9]*.[0-9]*"] },
     });
     expect(workflow.permissions).toEqual({ contents: "write" });
-    expect(Object.keys(workflow.jobs)).toEqual(["release"]);
+    expect(Object.keys(workflow.jobs)).toEqual(["guard", "release"]);
 
-    const release = workflow.jobs.release;
-    expect(release.name).toBe("Release");
-    expect(release["runs-on"]).toBe("macos-15");
-    expect(stepUsing(release, "actions/checkout@v7").with).toEqual({
+    const guard = workflow.jobs.guard;
+    expect(guard.name).toBe("Guard release source");
+    expect(guard["runs-on"]).toBe("ubuntu-latest");
+    expect(stepUsing(guard, "actions/checkout@v7").with).toEqual({
       "fetch-depth": 0,
       "persist-credentials": false,
     });
 
-    const validation = stepNamed(release, "Validate release source");
+    const validation = stepNamed(guard, "Validate release source");
+    expect(guard.steps.filter((step) => step.run)).toEqual([validation]);
+    expect(validation.shell).toBe("bash");
     expect(validation.env).toEqual({
       GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
     });
@@ -129,7 +180,24 @@ describe("GitHub workflows", () => {
         "1.2.3-01",
       ].some((tag) => semver.test(tag)),
     ).toBe(false);
-    expect(validation.run).toContain('expected_tag="$app_version"');
+    expect(validation.run).toContain(
+      'package_version="$(jq -r \'.version\' package.json)"',
+    );
+    expect(validation.run).toContain(
+      'tauri_version="$(jq -r \'.version\' src-tauri/tauri.conf.json)"',
+    );
+    expect(validation.run).toContain(
+      String.raw`cargo_version="$(sed -n '/^\[package\]/,/^\[/s/^version = \"\([^\"]*\)\"/\1/p' src-tauri/Cargo.toml | head -n 1)"`,
+    );
+    for (const version of [
+      "package_version",
+      "tauri_version",
+      "cargo_version",
+    ]) {
+      expect(validation.run).toContain(
+        `"$${version}" != "$GITHUB_REF_NAME"`,
+      );
+    }
     expect(validation.run).not.toContain("app-v");
     expect(validation.run).toContain("AUTHORIZATION: basic $authorization");
     expect(validation.run).toContain(
@@ -138,6 +206,41 @@ describe("GitHub workflows", () => {
     expect(validation.run).toContain(
       'git merge-base --is-ancestor "$GITHUB_SHA" origin/main',
     );
+    expect(
+      validation.run!.indexOf('"$cargo_version" != "$GITHUB_REF_NAME"'),
+    ).toBeLessThan(validation.run!.indexOf("fetch --no-tags origin main"));
+    expect(validation.run!.match(/extraheader/g)).toHaveLength(1);
+    expect(validation.run).not.toContain("git config");
+
+    const release = workflow.jobs.release;
+    expect(release.name).toBe("Release (${{ matrix.label }})");
+    expect(release["runs-on"]).toBe("${{ matrix.platform }}");
+    expect(release.needs).toBe("guard");
+    expect(release.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 1,
+      matrix: {
+        include: [
+          {
+            label: "macOS ARM64",
+            platform: "macos-15",
+            target: "aarch64-apple-darwin",
+            bundles: "dmg",
+            "apple-signing-identity": "-",
+          },
+          {
+            label: "Windows x64",
+            platform: "windows-latest",
+            target: "x86_64-pc-windows-msvc",
+            bundles: "nsis",
+            "apple-signing-identity": "",
+          },
+        ],
+      },
+    });
+    expect(stepUsing(release, "actions/checkout@v7").with).toEqual({
+      "persist-credentials": false,
+    });
 
     expect(stepUsing(release, "pnpm/action-setup@v6").with).toEqual({
       version: "10.33.0",
@@ -147,7 +250,7 @@ describe("GitHub workflows", () => {
       cache: "pnpm",
     });
     expect(stepUsing(release, "dtolnay/rust-toolchain@stable").with).toEqual({
-      targets: "aarch64-apple-darwin",
+      targets: "${{ matrix.target }}",
     });
     stepUsing(release, "Swatinem/rust-cache@v2");
     expect(release.steps.map((step) => step.run).filter(Boolean)).toEqual(
@@ -161,7 +264,7 @@ describe("GitHub workflows", () => {
     const build = stepUsing(release, "tauri-apps/tauri-action@v1");
     expect(build.env).toEqual({
       GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
-      APPLE_SIGNING_IDENTITY: "-",
+      APPLE_SIGNING_IDENTITY: "${{ matrix.apple-signing-identity }}",
     });
     expect(build.with).toMatchObject({
       tagName: "${{ github.ref_name }}",
@@ -171,7 +274,7 @@ describe("GitHub workflows", () => {
       releaseDraft: true,
       prerelease: false,
       uploadUpdaterJson: false,
-      args: "--target aarch64-apple-darwin --bundles dmg",
+      args: "--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}",
     });
   });
 });

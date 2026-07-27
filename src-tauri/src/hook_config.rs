@@ -104,7 +104,7 @@ fn write_document(path: &Path, document: &Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{install, is_installed, STATUS_MESSAGE};
+    use super::{install, is_installed, EVENTS, STATUS_MESSAGE};
 
     #[test]
     fn merges_pulse_hooks_without_replacing_existing_groups() {
@@ -138,5 +138,23 @@ mod tests {
             document["hooks"]["SessionStart"][0]["hooks"][0]["statusMessage"],
             STATUS_MESSAGE
         );
+    }
+
+    #[test]
+    fn preserves_a_quoted_windows_executable_and_remains_idempotent() {
+        let temp = tempfile::tempdir().unwrap();
+        let command = r#""C:\Users\Pulse Tester\AppData\Local\Codex Pulse\CodexPulse.exe" __hook"#;
+
+        install(temp.path(), command).unwrap();
+        install(temp.path(), command).unwrap();
+
+        let document: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(temp.path().join("hooks.json")).unwrap())
+                .unwrap();
+        for event in EVENTS {
+            let groups = document["hooks"][event].as_array().unwrap();
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0]["hooks"][0]["command"], command);
+        }
     }
 }

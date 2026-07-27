@@ -11,10 +11,14 @@ interface IssueForm {
   body: Array<{ id?: string; type: string }>;
 }
 
+function normalizeLineEndings(content: string) {
+  return content.replace(/\r\n?/g, "\n");
+}
+
 function readRoot(path: string) {
   const absolute = resolve(process.cwd(), path);
   expect(existsSync(absolute), `${path} should exist`).toBe(true);
-  return readFileSync(absolute, "utf8");
+  return normalizeLineEndings(readFileSync(absolute, "utf8"));
 }
 
 function readIssueForm(name: string) {
@@ -22,6 +26,12 @@ function readIssueForm(name: string) {
 }
 
 describe("GitHub community configuration", () => {
+  it("normalizes repository fixture line endings", () => {
+    expect(normalizeLineEndings("first\r\nsecond\rthird\n")).toBe(
+      "first\nsecond\nthird\n",
+    );
+  });
+
   it("declares Apache-2.0 consistently", () => {
     const license = readRoot("LICENSE");
     const packageJson = JSON.parse(readRoot("package.json")) as {
@@ -60,11 +70,27 @@ describe("GitHub community configuration", () => {
     expect(english).toContain("independent community project");
     expect(english).toContain("not affiliated with or endorsed by OpenAI");
     expect(english).toContain("not Developer ID signed or Apple notarized");
+    expect(english).toContain("Windows 11 x64");
+    expect(english).toContain("native Codex");
+    expect(english).toMatch(/WSL.*Unsupported/);
+    expect(english).toContain("unsigned");
+    expect(english).toContain("unsigned experimental Draft Release artifact");
+    expect(english).toContain("does not support native Mica or Acrylic");
+    expect(english).toContain("CSS translucent surfaces");
+    expect(english).toContain("pending-user-eyeball");
     expect(english).toContain("## Build from Source");
     expect(english).toContain("## License");
     expect(chinese).toContain("独立社区项目");
     expect(chinese).toContain("与 OpenAI 无隶属关系，也未获得其认可");
     expect(chinese).toContain("未使用 Developer ID 签名，也未经过 Apple 公证");
+    expect(chinese).toContain("Windows 11 x64");
+    expect(chinese).toContain("原生 Codex");
+    expect(chinese).toMatch(/WSL.*不支持/);
+    expect(chinese).toContain("未签名");
+    expect(chinese).toContain("未签名的实验性草稿发布产物");
+    expect(chinese).toContain("不支持原生 Mica 或 Acrylic");
+    expect(chinese).toContain("CSS 半透明表面");
+    expect(chinese).toContain("pending-user-eyeball");
     expect(chinese).toContain("## 从源码构建");
     expect(chinese).toContain("## 许可证");
   });
@@ -85,26 +111,34 @@ describe("GitHub community configuration", () => {
     expect(contributing).toContain(
       "cargo test --manifest-path src-tauri/Cargo.toml",
     );
+    expect(contributing).toContain("Rust (Windows)");
+    expect(contributing).toContain(
+      "pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis",
+    );
     expect(contributing).toContain("Do not include local Codex transcripts");
     expect(security).toContain("public GitHub issue");
     expect(security).toContain(
       "does not currently offer a private reporting channel",
     );
+    expect(security).toContain("operating system and version");
+    expect(security).toContain("architecture");
+    expect(security).toContain("Codex environment");
     expect(pullRequest).toContain("Privacy checklist");
     expect(config.blank_issues_enabled).toBe(false);
     expect(bug.labels).toEqual(["bug"]);
     expect(bug.body.map((item) => item.id).filter(Boolean)).toEqual(
-      expect.arrayContaining([
+      [
         "version",
-        "macos",
+        "operating_system",
         "architecture",
+        "codex_environment",
         "problem",
         "steps",
         "expected",
         "actual",
         "logs",
         "privacy",
-      ]),
+      ],
     );
     expect(feature.labels).toEqual(["enhancement"]);
     expect(feature.body.map((item) => item.id).filter(Boolean)).toEqual(
