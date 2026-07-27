@@ -313,11 +313,13 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
                 InitializationPhase::ReconcilingSessions,
                 "Reconciling active Codex sessions",
             );
-            let mut scan_cache = state
-                .scan_cache
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Codex Pulse scan cache lock is poisoned"))?;
-            let mut scan = scan_active_sessions_with_cache(&codex_home, now_ms, &mut scan_cache)?;
+            let mut scan = {
+                let mut scan_cache = state
+                    .scan_cache
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Codex Pulse scan cache lock is poisoned"))?;
+                scan_active_sessions_with_cache(&codex_home, now_ms, &mut scan_cache)?
+            };
             if let Ok(mut enricher) = state.git_enricher.lock() {
                 enricher.enrich(&mut scan.sessions, now_ms);
             }

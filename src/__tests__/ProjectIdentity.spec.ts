@@ -50,19 +50,24 @@ describe("ProjectIdentity", () => {
       global: { plugins: [i18n] }
     });
     const link = wrapper.get("a.session-card__path");
+    expect(link.attributes("aria-describedby")).toBeUndefined();
 
     await link.trigger("mouseenter");
     await nextTick();
     let popup = document.body.querySelector('[role="tooltip"]') as HTMLElement;
+    expect(link.attributes("aria-describedby")).toBe(popup.id);
     expect(popup.textContent).toContain("Default branch");
     expect(popup.textContent).toContain("trunk");
     expect(popup.textContent).toContain("https://example.com/acme/codex-pulse.git");
 
     await link.trigger("mouseleave");
+    await nextTick();
+    expect(link.attributes("aria-describedby")).toBeUndefined();
     await link.trigger("focus");
     await nextTick();
     popup = document.body.querySelector('[role="tooltip"]') as HTMLElement;
     expect(popup).not.toBeNull();
+    expect(link.attributes("aria-describedby")).toBe(popup.id);
   });
 
   it("keeps the popup open while either focus or hover remains active", async () => {
@@ -99,6 +104,7 @@ describe("ProjectIdentity", () => {
       global: { plugins: [i18n] }
     });
     expect(plain.get(".session-card__path").text()).toBe("plain-directory");
+    expect(plain.get(".session-card__path").attributes("title")).toBeUndefined();
     expect(plain.find(".session-card__branch").exists()).toBe(false);
     await plain.get(".session-card__path").trigger("mouseenter");
     expect(document.body.querySelector('[role="tooltip"]')).toBeNull();
