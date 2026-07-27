@@ -21,6 +21,26 @@
 - A hosted Windows runner is authoritative for Windows compilation and automated packaging, but it does not close any item listed as `pending-user-eyeball`.
 - Start implementation from the committed design at `6d9fd8d`. Because the current checkout is detached, use `superpowers:using-git-worktrees` to confirm this managed worktree is safe, then create branch `codex/windows-native-mvp` at the current commit. Do not push directly to `main`.
 
+## Execution Amendment
+
+The implementation preflight found that the original plan's new
+`windowsPlatform.spec.ts` assertions would test source text and file layout
+rather than consumer-visible behavior. The user approved this amendment before
+implementation:
+
+- do not create `windowsPlatform.spec.ts`;
+- prove Rust platform boundaries with real unit/integration behavior and
+  `cargo check --target x86_64-pc-windows-msvc --tests`;
+- prove the Windows GUI subsystem from the built PE header in the package
+  verification script;
+- prove Tauri Windows configuration and icons through Tauri schema/build and
+  the generated NSIS artifact;
+- treat generated icons, declarative Tauri/GitHub configuration, and human
+  documentation as explicit TDD exceptions; and
+- retain and update the repository's existing parsed
+  `githubWorkflows.spec.ts` and `githubCommunity.spec.ts` governance tests
+  rather than removing established gates.
+
 ---
 
 ### Task 1: Introduce one cross-platform file identity
@@ -198,7 +218,6 @@ git commit -m "fix: support Windows file identities"
 - Create: `src-tauri/src/hook/unix.rs`
 - Create: `src-tauri/src/hook/windows.rs`
 - Create: `src-tauri/tests/windows_hook_cli.rs`
-- Create: `src/__tests__/windowsPlatform.spec.ts`
 - Modify: `src-tauri/src/hook_config.rs`
 - Test: `src-tauri/src/hook/unix.rs`
 - Test: `src-tauri/src/hook/windows.rs`
@@ -277,35 +296,21 @@ In `windows.rs`, the unit test must bind a unique endpoint containing a UUID,
 call `notify_at` twice, and prove `accept` can rotate to a new server instance
 before the second connection.
 
-- [ ] **Step 3: Add a platform-module contract and run RED on macOS**
-
-Create `src/__tests__/windowsPlatform.spec.ts` with `existsSync` and
-`readFileSync` helpers. Its first test must assert:
-
-```ts
-expect(existsSync(resolve(process.cwd(), "src-tauri/src/hook.rs"))).toBe(false);
-for (const path of [
-  "src-tauri/src/hook/mod.rs",
-  "src-tauri/src/hook/unix.rs",
-  "src-tauri/src/hook/windows.rs",
-]) {
-  expect(existsSync(resolve(process.cwd(), path)), `${path} should exist`).toBe(
-    true,
-  );
-}
-```
+- [ ] **Step 3: Run the Windows target RED before the split**
 
 Run:
 
 ```bash
+rustup target add x86_64-pc-windows-msvc
 cargo test --manifest-path src-tauri/Cargo.toml hook_config
-pnpm exec vitest run src/__tests__/windowsPlatform.spec.ts
+cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --tests
 ```
 
 Expected: the hook-config test passes because the existing merge is already
-correct; the Vitest contract fails because `hook.rs` still exists and the
-three platform-module files do not. The Windows integration test is compiled
-only by the later Windows job.
+correct; the Windows target check fails on the unconditional Unix socket
+imports in `hook.rs`. Record those exact compiler errors. Errors from the
+still-unfixed macOS activation policy are an expected Task 3 RED, but do not
+replace the required hook errors.
 
 - [ ] **Step 4: Create the shared module**
 
@@ -421,17 +426,19 @@ cargo test --manifest-path src-tauri/Cargo.toml hook
 cargo test --manifest-path src-tauri/Cargo.toml hook_config
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
-pnpm exec vitest run src/__tests__/windowsPlatform.spec.ts
+cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --tests
 ```
 
 Expected on macOS: Unix hook and hook-config tests pass and the full Rust suite
-remains green. Record the Windows named-pipe unit/integration tests as
-`pending-windows-ci`, not as locally verified.
+remains green. The Windows target check must no longer report any Hook
+transport error; it may remain RED only at the Task 3 activation-policy
+boundary. The named-pipe tests type-check here but remain
+`pending-windows-ci` for execution.
 
 - [ ] **Step 8: Commit the transport split**
 
 ```bash
-git add src-tauri/src/hook.rs src-tauri/src/hook src-tauri/src/hook_config.rs src-tauri/tests/windows_hook_cli.rs src/__tests__/windowsPlatform.spec.ts
+git add src-tauri/src/hook.rs src-tauri/src/hook src-tauri/src/hook_config.rs src-tauri/tests/windows_hook_cli.rs
 git commit -m "fix: add Windows hook transport"
 ```
 
@@ -444,10 +451,8 @@ git commit -m "fix: add Windows hook transport"
 - Modify: `src-tauri/src/main.rs`
 - Modify: `src-tauri/src/app.rs`
 - Modify: `src-tauri/src/commands.rs`
-- Modify: `src/__tests__/windowsPlatform.spec.ts`
 - Test: `src-tauri/src/app.rs`
 - Test: `src-tauri/src/commands.rs`
-- Test: `src/__tests__/windowsPlatform.spec.ts`
 
 - [ ] **Step 1: Add RED tests for runtime degradation**
 
@@ -480,30 +485,16 @@ Extract the body of `get_snapshot` into
 the command remains a thin `State` adapter and the test does not require a
 mock Tauri runtime.
 
-- [ ] **Step 2: Add RED source contracts for Windows startup**
-
-Create `src/__tests__/windowsPlatform.spec.ts` with file-reading helpers and
-assert:
-
-```ts
-expect(readRoot("src-tauri/src/main.rs")).toContain(
-  '#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]',
-);
-expect(readRoot("src-tauri/src/app.rs")).toContain(
-  '#[cfg(target_os = "macos")]',
-);
-expect(readRoot("src-tauri/src/app.rs")).toContain(
-  '#[cfg(not(target_os = "macos"))]',
-);
-```
+- [ ] **Step 2: Confirm the Windows startup RED**
 
 Run:
 
 ```bash
-pnpm exec vitest run src/__tests__/windowsPlatform.spec.ts
+cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --tests
 ```
 
-Expected: all three assertions fail against the current unconditional source.
+Expected: compilation fails at the unguarded macOS activation-policy call.
+The Task 2 Hook errors must already be absent.
 
 - [ ] **Step 3: Add the Windows GUI subsystem attribute**
 
@@ -575,19 +566,21 @@ The fallback call must remain outside the error branch.
 Run:
 
 ```bash
-pnpm exec vitest run src/__tests__/windowsPlatform.spec.ts
 cargo test --manifest-path src-tauri/Cargo.toml commands::tests
 cargo test --manifest-path src-tauri/Cargo.toml app::tests
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --tests
 pnpm test
 ```
 
-Expected: the new contracts and degradation test pass; all existing tests pass.
+Expected: the degradation test and all existing tests pass; the full Windows
+target check is now green. PE subsystem behavior is verified from the release
+binary in Task 5, not by reading `main.rs`.
 
 - [ ] **Step 7: Commit startup compatibility**
 
 ```bash
-git add src-tauri/src/main.rs src-tauri/src/app.rs src-tauri/src/commands.rs src/__tests__/windowsPlatform.spec.ts
+git add src-tauri/src/main.rs src-tauri/src/app.rs src-tauri/src/commands.rs
 git commit -m "fix: make app startup Windows compatible"
 ```
 
@@ -601,32 +594,25 @@ git commit -m "fix: make app startup Windows compatible"
 - Modify: `src-tauri/tauri.conf.json`
 - Create: generated files under `src-tauri/icons/`, including `icon.ico`,
   `icon.icns`, `32x32.png`, `128x128.png`, and `128x128@2x.png`
-- Modify: `src/__tests__/windowsPlatform.spec.ts`
 - Test: `src-tauri/src/tray.rs`
-- Test: `src/__tests__/windowsPlatform.spec.ts`
 
-- [ ] **Step 1: Extend the static contract and record RED**
+- [ ] **Step 1: Add the tray-selection behavior test and record RED**
 
-Parse `src-tauri/tauri.conf.json` in `windowsPlatform.spec.ts`. Assert:
+Extend the existing Rust tray test before adding the selector:
 
-```ts
-expect(existsSync(resolve(process.cwd(), "src-tauri/icons/icon.ico"))).toBe(true);
-expect(config.bundle.icon).toEqual(
-  expect.arrayContaining([
-    "icons/32x32.png",
-    "icons/128x128.png",
-    "icons/128x128@2x.png",
-    "icons/icon.icns",
-    "icons/icon.ico",
-  ]),
-);
-expect(config.bundle.windows).toMatchObject({
-  webviewInstallMode: { type: "downloadBootstrapper", silent: true },
-  nsis: { installMode: "currentUser" },
-});
+```rust
+assert_eq!(tray_icon_is_template(), cfg!(target_os = "macos"));
+assert!(tauri::image::Image::from_bytes(TRAY_ICON_BYTES).is_ok());
 ```
 
-Run the focused Vitest test. Expected: missing icon and configuration failures.
+Run:
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml tray::tests
+```
+
+Expected: compilation fails because `tray_icon_is_template` and
+`TRAY_ICON_BYTES` do not exist.
 
 - [ ] **Step 2: Generate the standard Tauri icon set**
 
@@ -679,26 +665,27 @@ Use `TRAY_ICON_BYTES` and
 
 ```rust
 assert_eq!(tray_icon_is_template(), cfg!(target_os = "macos"));
-assert!(!TRAY_ICON_BYTES.is_empty());
+assert!(tauri::image::Image::from_bytes(TRAY_ICON_BYTES).is_ok());
 ```
 
 - [ ] **Step 5: Confirm GREEN and config validity**
 
-Run:
+Generated icon files and declarative bundle configuration use the approved TDD
+exception. Validate them through their actual Tauri consumer:
 
 ```bash
-pnpm exec vitest run src/__tests__/windowsPlatform.spec.ts
 cargo test --manifest-path src-tauri/Cargo.toml tray::tests
+pnpm tauri info
 pnpm tauri build -- --debug --bundles app
 ```
 
-Expected on macOS: the config contract, tray tests, and debug app bundle build
-succeed. The NSIS bundle itself remains `pending-windows-ci`.
+Expected on macOS: the tray behavior test, Tauri config loading, and debug app
+bundle build succeed. The NSIS bundle itself remains `pending-windows-ci`.
 
 - [ ] **Step 6: Commit icons and configuration**
 
 ```bash
-git add src-tauri/icons src-tauri/src/tray.rs src-tauri/tauri.conf.json src/__tests__/windowsPlatform.spec.ts
+git add src-tauri/icons src-tauri/src/tray.rs src-tauri/tauri.conf.json
 git commit -m "feat: add Windows bundle assets"
 ```
 
@@ -766,6 +753,17 @@ if (-not (Test-Path $app) -or -not (Test-Path $uninstaller)) {
   throw "NSIS did not install CodexPulse.exe and uninstall.exe"
 }
 
+$image = [System.IO.File]::ReadAllBytes($app)
+$peOffset = [BitConverter]::ToInt32($image, 0x3c)
+$signature = [System.Text.Encoding]::ASCII.GetString($image, $peOffset, 4)
+if ($signature -ne "PE`0`0") {
+  throw "Installed CodexPulse.exe does not have a valid PE signature"
+}
+$subsystem = [BitConverter]::ToUInt16($image, $peOffset + 24 + 68)
+if ($subsystem -ne 2) {
+  throw "Expected Windows GUI subsystem 2, found $subsystem"
+}
+
 $hook = Start-Process -FilePath $app -ArgumentList "__hook" -PassThru -Wait
 if ($hook.ExitCode -ne 0) {
   throw "Installed __hook helper exited with $($hook.ExitCode)"
@@ -828,26 +826,20 @@ git commit -m "ci: validate Windows builds and installer"
 - Modify: `src-tauri/tauri.conf.json`
 - Modify: `.github/workflows/release.yml`
 - Modify: `src/__tests__/githubWorkflows.spec.ts`
-- Modify: `src/__tests__/windowsPlatform.spec.ts`
 - Test: `src/__tests__/githubWorkflows.spec.ts`
-- Test: `src/__tests__/windowsPlatform.spec.ts`
 
-- [ ] **Step 1: Add RED version-alignment assertions**
+- [ ] **Step 1: Record the declarative version-metadata exception**
 
-In `windowsPlatform.spec.ts`, read `package.json`, the Tauri config, and
-`src-tauri/Cargo.toml`. Assert:
+Before editing, record the current values:
 
-```ts
-expect(packageJson.version).toBe("0.3.0");
-expect(tauriConfig.version).toBe("0.3.0");
-expect(cargo).toContain('version = "0.3.0"');
-expect(cargo).toContain(
-  'description = "A local desktop monitor for active Codex sessions"',
-);
+```bash
+jq -r '.version' package.json src-tauri/tauri.conf.json
+sed -n '/^\[package\]/,/^\[/p' src-tauri/Cargo.toml | sed -n '1,8p'
 ```
 
-Run the focused test. Expected: version and macOS-only description assertions
-fail.
+Expected: all versions are `0.2.0` and the Cargo description is macOS-only.
+These declarative edits use the approved TDD exception; the release guard and
+actual build consume them.
 
 - [ ] **Step 2: Make the release-workflow contract RED**
 
@@ -942,9 +934,10 @@ the NSIS install script to this release job.
 Run:
 
 ```bash
-pnpm exec vitest run src/__tests__/githubWorkflows.spec.ts src/__tests__/windowsPlatform.spec.ts
+pnpm exec vitest run src/__tests__/githubWorkflows.spec.ts
 pnpm test
 cargo test --manifest-path src-tauri/Cargo.toml
+pnpm tauri info
 ```
 
 Expected: all local contracts and regressions pass.
@@ -952,7 +945,7 @@ Expected: all local contracts and regressions pass.
 - [ ] **Step 7: Commit version and release workflow**
 
 ```bash
-git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json .github/workflows/release.yml src/__tests__/githubWorkflows.spec.ts src/__tests__/windowsPlatform.spec.ts
+git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json .github/workflows/release.yml src/__tests__/githubWorkflows.spec.ts
 git commit -m "ci: build Windows draft releases"
 ```
 
