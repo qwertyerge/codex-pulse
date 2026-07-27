@@ -415,11 +415,11 @@ Native `windows_hook_cli` execution remains CI evidence because its embedded
 - [ ] **Step 3: Install the fixed NSIS through the visible Windows installer**
 
 Launch the fixed setup from the shared Mac bundle directory under the
-interactive `loki` user. Do not bypass SmartScreen. Accept the default
+interactive test account. Do not bypass SmartScreen. Accept the default
 per-user destination:
 
 ```text
-C:\Users\loki\AppData\Local\Codex Pulse
+%LOCALAPPDATA%\Codex Pulse
 ```
 
 Finish with `Run Codex Pulse` selected and capture the visible window.
@@ -448,7 +448,7 @@ Then run:
 
 ```powershell
 $process = Start-Process `
-  -FilePath "C:\Users\loki\AppData\Local\Codex Pulse\CodexPulse.exe" `
+  -FilePath (Join-Path $env:LOCALAPPDATA "Codex Pulse\CodexPulse.exe") `
   -ArgumentList "__hook" `
   -PassThru `
   -Wait
@@ -532,7 +532,7 @@ resizability, or macOS activation policy.
 Run the host Rust test, the full host suites, rebuild the x64 NSIS package, and
 run the package verifier in PD.
 
-Then install the fixed package for the interactive `loki` user and verify:
+Then install the fixed package for the interactive test account and verify:
 
 - a fresh initial window uses the compact 360 by 420 logical-pixel content size;
 - it is not maximized;
@@ -627,7 +627,7 @@ After the normal startup survival and geometry checks, reject direct
 - [ ] **Step 5: Rebuild and run final PD acceptance**
 
 Build the x64 NSIS package, run the full package verifier, then install under
-the interactive `loki` profile with correct user environment variables.
+the interactive test profile with correct user environment variables.
 Visually verify the 360-pixel initial header, resize down to the 320-pixel
 minimum, and launch from the repaired desktop shortcut.
 

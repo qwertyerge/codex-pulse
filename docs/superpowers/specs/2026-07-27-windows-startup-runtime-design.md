@@ -203,8 +203,8 @@ startup path and must remain hidden or be avoided in subsequent visual runs.
 
 A scheduled-install harness also created desktop and Start Menu shortcuts whose
 targets inherited the harness's `systemprofile` path even though the
-application was installed for `loki`. The PD shortcuts are repaired to point
-directly at the per-user `CodexPulse.exe`.
+application was installed for the interactive test account. The PD shortcuts
+are repaired to point directly at the per-user `CodexPulse.exe`.
 
 The installed-package gate verifies that both shortcuts:
 
