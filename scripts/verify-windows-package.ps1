@@ -76,6 +76,99 @@ function Invoke-BoundedProcess {
   }
 }
 
+function Read-ProcessDiagnostic {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    return "<not created>"
+  }
+
+  $content = Get-Content -LiteralPath $Path -Raw
+  if ([string]::IsNullOrWhiteSpace($content)) {
+    return "<empty>"
+  }
+  return $content.Trim()
+}
+
+function Invoke-ApplicationStartupSmoke {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$FilePath,
+
+    [int]$WindowTimeoutSeconds = 15,
+
+    [int]$SurvivalSeconds = 3
+  )
+
+  $diagnosticDirectory = Join-Path `
+    $env:TEMP `
+    ("codex-pulse-startup-smoke-" + [guid]::NewGuid().ToString("N"))
+  New-Item -ItemType Directory -Path $diagnosticDirectory | Out-Null
+  $stdout = Join-Path $diagnosticDirectory "stdout.log"
+  $stderr = Join-Path $diagnosticDirectory "stderr.log"
+  $process = $null
+
+  try {
+    $process = Start-Process `
+      -FilePath $FilePath `
+      -PassThru `
+      -RedirectStandardOutput $stdout `
+      -RedirectStandardError $stderr
+
+    $windowDeadline = (Get-Date).AddSeconds($WindowTimeoutSeconds)
+    $windowObserved = $false
+    while ((Get-Date) -lt $windowDeadline) {
+      if ($process.HasExited) {
+        $process.WaitForExit()
+        $diagnostic = Read-ProcessDiagnostic -Path $stderr
+        throw "Installed application exited before startup completed with code $($process.ExitCode). stderr: $diagnostic"
+      }
+
+      $process.Refresh()
+      if ($process.MainWindowHandle -ne [IntPtr]::Zero) {
+        $windowObserved = $true
+        break
+      }
+      Start-Sleep -Milliseconds 250
+    }
+
+    if (-not $windowObserved) {
+      $diagnostic = Read-ProcessDiagnostic -Path $stderr
+      throw "Installed application did not create a main window within $WindowTimeoutSeconds seconds. stderr: $diagnostic"
+    }
+
+    $survivalDeadline = (Get-Date).AddSeconds($SurvivalSeconds)
+    while ((Get-Date) -lt $survivalDeadline) {
+      if ($process.HasExited) {
+        $process.WaitForExit()
+        $diagnostic = Read-ProcessDiagnostic -Path $stderr
+        throw "Installed application exited during the $SurvivalSeconds-second survival window with code $($process.ExitCode). stderr: $diagnostic"
+      }
+      Start-Sleep -Milliseconds 250
+    }
+  }
+  finally {
+    if ($null -ne $process -and -not $process.HasExited) {
+      $taskkill = Join-Path $env:SystemRoot "System32\taskkill.exe"
+      & $taskkill /PID $process.Id /T /F | Out-Null
+      $taskkillExitCode = $LASTEXITCODE
+      $process.Refresh()
+      if ($taskkillExitCode -ne 0 -and -not $process.HasExited) {
+        $script:cleanupMutationAllowed = $false
+        throw "Failed to stop the startup-smoke process tree for PID $($process.Id); taskkill exited with $taskkillExitCode"
+      }
+
+      if (-not $process.WaitForExit(10000)) {
+        $script:cleanupMutationAllowed = $false
+        throw "Startup-smoke process tree for PID $($process.Id) did not exit within 10 seconds"
+      }
+    }
+  }
+}
+
 function Test-InstalledArtifactsPresent {
   return (
     (Test-Path -LiteralPath $script:app) -or
@@ -276,6 +369,8 @@ try {
   if ($subsystem -ne 2) {
     throw "Expected Windows GUI subsystem 2, found $subsystem"
   }
+
+  Invoke-ApplicationStartupSmoke -FilePath $script:app
 
   Invoke-BoundedProcess `
     -FilePath $script:app `
