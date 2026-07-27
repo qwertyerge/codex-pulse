@@ -15,14 +15,18 @@ describe("narrow TopBar layout", () => {
     expect(rule(".top-bar__mark")).toContain("flex: 0 0 auto;");
     expect(rule(".top-bar__name")).toContain("flex: 0 0 auto;");
     expect(rule(".top-bar__count")).toContain("min-width: 0;");
+    expect(rule(".top-bar__count")).toContain("flex: 0 1 auto;");
+    expect(rule(".top-bar__count")).toContain("overflow: hidden;");
     expect(rule(".top-bar__count")).toContain("text-overflow: ellipsis;");
+    expect(rule(".top-bar__count")).toContain("white-space: nowrap;");
   });
 
   it("keeps the controls anchored across the 360 pixel breakpoint", () => {
-    const narrowMedia = stylesheet.slice(
-      stylesheet.indexOf("@media (max-width: 360px)"),
-      stylesheet.indexOf("@keyframes pulse-dot")
-    );
+    const mediaStart = stylesheet.indexOf("@media (max-width: 360px)");
+    const mediaEnd = stylesheet.indexOf("@keyframes pulse-dot");
+    expect(mediaStart).toBeGreaterThanOrEqual(0);
+    expect(mediaEnd).toBeGreaterThan(mediaStart);
+    const narrowMedia = stylesheet.slice(mediaStart, mediaEnd);
 
     expect(narrowMedia).not.toContain(".pulse-shell { padding:");
     expect(narrowMedia).not.toContain(".top-bar {");
