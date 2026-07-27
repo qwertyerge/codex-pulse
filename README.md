@@ -12,7 +12,7 @@ Codex Pulse is a compact macOS and Windows desktop companion for watching active
 > Codex Pulse is an independent community project. It is not affiliated with or endorsed by OpenAI.
 
 > [!WARNING]
-> Published macOS artifacts are experimental. They are not Developer ID signed or Apple notarized, so normal Gatekeeper installation is not yet supported. The Windows NSIS installer is also experimental and unsigned. Do not bypass SmartScreen or enterprise security policy. Build from source for the current supported path.
+> Published macOS artifacts are experimental. They are not Developer ID signed or Apple notarized, so normal Gatekeeper installation is not yet supported. The Windows NSIS installer is an unsigned experimental Draft Release artifact. Do not bypass SmartScreen or enterprise security policy. Build from source for the current supported path.
 
 ## Highlights
 
@@ -27,10 +27,10 @@ Codex Pulse is a compact macOS and Windows desktop companion for watching active
 | Environment | Status |
 | --- | --- |
 | macOS ARM64 | Existing experimental DMG |
-| Windows 11 x64 native Codex | `0.3.0` MVP, unsigned experimental NSIS |
+| Windows 11 x64 native Codex | `0.3.0` MVP, unsigned experimental Draft Release NSIS |
 | WSL, Windows ARM64, Windows 10 | Unsupported |
 
-Windows support requires the native Codex app and native Windows Codex data. WSL sessions and paths are not supported or translated. The native Windows installer artifact and interactive desktop UX proof remain `pending-user-eyeball`; the checked-in workflows alone are not evidence that GitHub Actions has verified Windows.
+Windows support requires the native Codex app and native Windows Codex data. WSL sessions and paths are not supported or translated. The MVP does not support native Mica or Acrylic; it preserves the existing CSS translucent surfaces. The native Windows installer artifact and interactive desktop UX proof remain `pending-user-eyeball`; the checked-in workflows alone are not evidence that GitHub Actions has verified Windows.
 
 ## Requirements
 

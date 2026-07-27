@@ -12,7 +12,7 @@ Codex Pulse 是用于观察活跃 Codex 任务的轻量 macOS 与 Windows 桌面
 > Codex Pulse 是独立社区项目，与 OpenAI 无隶属关系，也未获得其认可。
 
 > [!WARNING]
-> 当前发布的 macOS 构建属于实验性产物，未使用 Developer ID 签名，也未经过 Apple 公证，因此尚不支持常规的 Gatekeeper 安装流程。Windows NSIS 安装程序同样是实验性的未签名产物。请勿绕过 SmartScreen 或企业安全策略。当前推荐从源码构建。
+> 当前发布的 macOS 构建属于实验性产物，未使用 Developer ID 签名，也未经过 Apple 公证，因此尚不支持常规的 Gatekeeper 安装流程。Windows NSIS 安装程序是未签名的实验性草稿发布产物。请勿绕过 SmartScreen 或企业安全策略。当前推荐从源码构建。
 
 ## 功能
 
@@ -27,10 +27,10 @@ Codex Pulse 是用于观察活跃 Codex 任务的轻量 macOS 与 Windows 桌面
 | 环境 | 状态 |
 | --- | --- |
 | macOS ARM64 | 现有实验性 DMG |
-| Windows 11 x64 原生 Codex | `0.3.0` MVP，未签名的实验性 NSIS |
+| Windows 11 x64 原生 Codex | `0.3.0` MVP，未签名的实验性草稿发布 NSIS |
 | WSL、Windows ARM64、Windows 10 | 不支持 |
 
-Windows 支持要求使用原生 Codex 应用和原生 Windows Codex 数据；不支持也不会转换 WSL 会话或路径。原生 Windows 安装产物和交互式桌面 UX 证据仍为 `pending-user-eyeball`；仅有已检入的工作流不能证明 GitHub Actions 已经验证 Windows。
+Windows 支持要求使用原生 Codex 应用和原生 Windows Codex 数据；不支持也不会转换 WSL 会话或路径。该 MVP 不支持原生 Mica 或 Acrylic，保留的是现有 CSS 半透明表面。原生 Windows 安装产物和交互式桌面 UX 证据仍为 `pending-user-eyeball`；仅有已检入的工作流不能证明 GitHub Actions 已经验证 Windows。
 
 ## 环境要求
 
