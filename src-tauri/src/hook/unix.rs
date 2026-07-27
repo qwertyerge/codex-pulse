@@ -10,7 +10,6 @@ use anyhow::Context;
 use tauri::AppHandle;
 
 const SOCKET_FILE: &str = "events.sock";
-pub const SESSIONS_CHANGED_EVENT: &str = "sessions-changed";
 
 pub fn socket_path() -> PathBuf {
     dirs::data_local_dir()
