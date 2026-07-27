@@ -472,6 +472,7 @@ mod tests {
             thread_id: "root".into(),
             title: "Root".into(),
             cwd: "/repo".into(),
+            git: None,
             session_created_at_ms: 1_000,
             current_run_started_at_ms: 2_000,
             recent_event: event,

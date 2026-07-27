@@ -72,10 +72,27 @@ pub struct InitializationSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionGitContext {
+    pub project_name: String,
+    pub primary_checkout_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_upstream: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionSnapshot {
     pub thread_id: String,
     pub title: String,
     pub cwd: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<SessionGitContext>,
     pub session_created_at_ms: i64,
     pub current_run_started_at_ms: i64,
     pub recent_event: Option<RecentEvent>,
@@ -195,4 +212,36 @@ pub enum LifecycleEventKind {
     TurnEnd,
     SubagentEnd,
     Abort,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serializes_git_context_with_camel_case_fields() {
+        let snapshot = SessionSnapshot {
+            thread_id: "thread".into(),
+            title: "Task".into(),
+            cwd: "/worktrees/project".into(),
+            git: Some(SessionGitContext {
+                project_name: "project".into(),
+                primary_checkout_path: "/src/project".into(),
+                branch: Some("feature/git".into()),
+                default_branch: Some("trunk".into()),
+                default_upstream: Some("company/trunk".into()),
+                remote_url: Some("https://example.com/company/project.git".into()),
+            }),
+            session_created_at_ms: 1_000,
+            current_run_started_at_ms: 2_000,
+            recent_event: None,
+            last_user_message: None,
+        };
+
+        let value = serde_json::to_value(snapshot).unwrap();
+
+        assert_eq!(value["git"]["projectName"], "project");
+        assert_eq!(value["git"]["primaryCheckoutPath"], "/src/project");
+        assert_eq!(value["git"]["defaultUpstream"], "company/trunk");
+    }
 }
