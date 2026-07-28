@@ -277,6 +277,8 @@ button { font: inherit; }
 :root[data-theme="dark"] .quota-footer__line time, :root[data-theme="dark"] .quota-footer--unavailable { color: #9ba8bb; }
 :root[data-theme="dark"] .quota-footer__progress { background: rgba(138, 194, 255, 0.18); }
 :root[data-theme="dark"] .quota-footer--stale { background: rgba(31, 42, 64, 0.42); }
+:root[data-theme="dark"] .footer-stack .quota-footer { background: transparent; }
+:root[data-theme="dark"] .footer-stack .quota-footer--stale { background: transparent; }
 :root[data-theme="dark"] .initialization-status-row { border-color: rgba(138, 194, 255, 0.18); color: #b7c3d7; background: rgba(32, 46, 72, 0.68); }
 :root[data-theme="dark"] .quota-footer__stale-content p { color: #8f9cb2; }
 :root[data-theme="dark"] .session-list__end { background: linear-gradient(90deg, rgba(191, 207, 237, 0.16) 0, rgba(191, 207, 237, 0.16) calc(50% - 22px), transparent calc(50% - 22px), transparent calc(50% + 22px), rgba(191, 207, 237, 0.16) calc(50% + 22px), rgba(191, 207, 237, 0.16) 100%); color: #7f8da5; }

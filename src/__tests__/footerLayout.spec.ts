@@ -42,6 +42,15 @@ describe("footer layout", () => {
     expect(footerStack).toContain("padding:");
   });
 
+  it("keeps nested quota surfaces transparent in dark mode", () => {
+    expect(stylesheet).toContain(
+      ':root[data-theme="dark"] .footer-stack .quota-footer { background: transparent; }',
+    );
+    expect(stylesheet).toContain(
+      ':root[data-theme="dark"] .footer-stack .quota-footer--stale { background: transparent; }',
+    );
+  });
+
   it("stretches the bottom-anchored footer only while a background event is visible", () => {
     expect(rule(".footer-stack")).toContain("max-height: 48px;");
     expect(rule(".footer-stack")).toContain("transition: max-height");
