@@ -26,6 +26,32 @@ Repository: `qwertyerge/codex-pulse`
 
 The final `git diff --check` also exited `0`.
 
+## PR Review Follow-up Verification
+
+The `cfc0e9d5cbd9544f4f378cc3d0574034eba92b0b` results above remain
+immutable point-in-time evidence for the initial implementation. They are not
+retroactively rewritten to include later review fixes.
+
+Fresh verification was run from the clean, detached implementation commit
+`ecabfeb84ca5885fce5d2fd3b1df42971232dcd5`.
+
+| Command | Exit | Observed result |
+| --- | ---: | --- |
+| `pnpm test` | 0 | 25 test files passed; 135 tests passed; 0 failed |
+| `pnpm build` | 0 | `vue-tsc --noEmit` and Vite production build passed; 1,829 modules transformed |
+| `cargo fmt --check --manifest-path src-tauri/Cargo.toml` | 0 | No formatting differences |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | 0 | 82 Rust unit tests passed; 0 failed; auxiliary and doc-test targets also passed |
+| `git diff --check` | 0 | No whitespace errors |
+
+This follow-up proves the local source, contract tests, native MockRuntime IPC
+registration regression, and production frontend build at the implementation
+commit. GitHub Actions is a separate post-push gate and is not inferred from
+these local commands.
+
+Native old-version-to-new-version installation and restart, Windows
+interaction, publication, and post-publication update checks remain
+unverified.
+
 ## Signed Tauri Boundary
 
 - The generated public key bytes exactly match
