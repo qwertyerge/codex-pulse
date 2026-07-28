@@ -146,22 +146,27 @@ record of its original evidence timestamp rather than being rewritten.
 
 Implementation follows test-driven development.
 
-A focused Vitest contract first fails because the script does not exist. The
-contract then verifies:
+A focused Vitest contract first fails because the script does not exist. It
+copies the real script into a temporary repository fixture and executes it
+against controlled Keychain, Tauri-build, codesign, plist, architecture, and
+BSD-stat command boundaries. The contract asserts observable behavior rather
+than grepping the script source:
 
-- the script is executable and passes `bash -n`;
-- `--help` exits successfully without invoking Keychain or a build;
-- shell tracing is absent;
-- the default Apple identity is `-`;
-- Keychain lookup and secret cleanup are present;
-- source and archived apps both receive strict codesign verification;
-- the updater archive and non-empty signature are required;
-- archive extraction uses a temporary directory with cleanup; and
-- source/archive executable hash equality is enforced.
+- `--help` succeeds without a toolchain, Keychain lookup, or build;
+- the default Apple identity is `-`, and an explicit identity is honored;
+- the build receives the key path and a canary Keychain password without
+  exposing either secret value in output;
+- failures from either source or archived-app strict codesign check propagate
+  as non-zero exits;
+- an insecure key mode, empty updater signature, or source/archive executable
+  mismatch fails closed;
+- a valid fixture produces the expected non-secret evidence; and
+- script-owned extraction directories are removed after success and failure.
 
-The same contract verifies that `CONTRIBUTING.md` and the automatic-update
-plan reference the canonical script instead of duplicating the fragile build
-sequence.
+The external command doubles provide controlled inputs and failures; tests
+assert the real runbook's exit status, output, artifacts, and cleanup rather
+than asserting calls on the doubles. Human documentation is reviewed directly
+and is not protected by brittle source-text assertions.
 
 Final verification includes:
 
