@@ -31,6 +31,8 @@
 - Do not push, create a pull request, change version, tag, create a Draft, publish, or mutate `main`.
 - Preserve the Codex-managed detached worktree. Commit checkpoints on detached HEAD and report that provenance.
 - Treat local tests, local signed macOS artifacts, GitHub Secrets, future Draft assets, interactive platform proof, and publication as separate evidence.
+- Test executable behavior through the real state machine, mounted components, and manifest process; mock only Tauri network/IPC/native-dialog boundaries.
+- Treat parsed Tauri/GitHub declarations as the approved configuration-class TDD exception, and review human prose semantically instead of adding exact-copy tests.
 
 ---
 
@@ -51,9 +53,9 @@
 | `src/styles.css` | Style light/dark badge states and preserve the 320-pixel layout. |
 | `src/__tests__/TopBar.spec.ts` | Test badge text, visibility, disabled state, accessibility, and activation. |
 | `src/__tests__/topBarLayout.spec.ts` | Lock the active-count replacement and narrow updating layout. |
-| `src/__tests__/i18n.spec.ts` | Lock complete updater copy for every locale. |
+| `src/__tests__/i18n.spec.ts` | Require the updater key set to be complete and non-empty in every locale. |
 | `src/App.vue` | Start and stop the updater and pass localized confirmation text. |
-| `src/__tests__/App.spec.ts` | Lock lifecycle ordering and TopBar wiring. |
+| `src/__tests__/AppUpdater.spec.ts` | Mount the real App/updater and prove production timing, teardown, and the non-production network gate. |
 | `scripts/verify-updater-manifest.mjs` | Validate an authenticated Draft `latest.json` without trusting shell string matches. |
 | `src/__tests__/updaterManifest.spec.ts` | Test valid and invalid updater manifests. |
 | `.github/workflows/release.yml` | Sign both builds, upload signatures/manifest, and run the validation job. |
@@ -115,36 +117,7 @@ function read(path: string) {
 }
 
 describe("automatic updater configuration", () => {
-  it("pins compatible official plugin bindings", () => {
-    const packageJson = JSON.parse(read("package.json")) as {
-      version: string;
-      dependencies: Record<string, string>;
-    };
-    const cargo = read("src-tauri/Cargo.toml");
-
-    expect(packageJson.version).toBe("0.3.2");
-    expect(packageJson.dependencies).toMatchObject({
-      "@tauri-apps/plugin-dialog": "^2.7.2",
-      "@tauri-apps/plugin-process": "^2.3.1",
-      "@tauri-apps/plugin-updater": "^2.10.1"
-    });
-    expect(cargo).toContain('version = "0.3.2"');
-    expect(cargo).toContain('tauri-plugin-dialog = "2.7.2"');
-    expect(cargo).toContain('tauri-plugin-process = "2.3.1"');
-    expect(cargo).toContain('tauri-plugin-updater = "2.10.1"');
-  });
-
-  it("registers only the official native plugin implementations", () => {
-    const source = read("src-tauri/src/app.rs");
-
-    expect(source).toContain(".plugin(tauri_plugin_dialog::init())");
-    expect(source).toContain(".plugin(tauri_plugin_process::init())");
-    expect(source).toContain(
-      ".plugin(tauri_plugin_updater::Builder::new().build())"
-    );
-  });
-
-  it("creates signed artifacts from the approved static endpoint", () => {
+  it("declares signed artifacts at the approved static endpoint", () => {
     const config = JSON.parse(read("src-tauri/tauri.conf.json")) as {
       version: string;
       bundle: { createUpdaterArtifacts?: boolean };
@@ -195,8 +168,11 @@ Run:
 pnpm test -- src/__tests__/updaterConfiguration.spec.ts
 ```
 
-Expected: FAIL because the plugin dependencies, registration, updater
-configuration, public key, and permissions do not exist.
+Expected: FAIL because the updater configuration, public key, and permissions
+do not exist. This parsed JSON
+contract is the explicitly approved configuration-class TDD exception; native
+plugin registration is verified by compilation and the signed bundle rather
+than by grepping `app.rs`.
 
 - [ ] **Step 4: Add the approved plugin dependencies**
 
@@ -354,8 +330,6 @@ import {
   it,
   vi
 } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 
 import {
   UPDATE_CHECK_INTERVAL_MS,
@@ -462,17 +436,6 @@ it("does nothing when the production runtime gate is disabled", async () => {
 
   expect(check).not.toHaveBeenCalled();
   expect(updater.state.value).toEqual({ phase: "idle" });
-});
-
-it("gates the default runtime to production Tauri builds", () => {
-  const source = readFileSync(
-    resolve(process.cwd(), "src/composables/useUpdater.ts"),
-    "utf8"
-  );
-
-  expect(source).toContain(
-    "enabled: import.meta.env.PROD && isTauri()"
-  );
 });
 
 it("returns to idle when the current version is latest", async () => {
@@ -1069,24 +1032,32 @@ it("emits activation only from an enabled update badge", async () => {
 
 - [ ] **Step 2: Add locale and narrow-layout contracts**
 
-In `src/__tests__/i18n.spec.ts`, add:
+In `src/__tests__/i18n.spec.ts`, import `messages` and add a structural locale
+contract. It catches a missing or blank locale entry without pinning
+human-facing wording:
 
 ```ts
-it.each([
-  ["en", ["Update 42%", "Updating", "Update", "Update failed"]],
-  ["zh-CN", ["更新 42%", "更新中", "更新", "更新失败"]],
-  ["fr", ["MàJ 42 %", "MàJ…", "MàJ", "Échec MàJ"]],
-  ["de", ["Update 42 %", "Update läuft", "Update", "Updatefehler"]]
-] as const)("defines complete updater badge copy for %s", (locale, expected) => {
-  i18n.global.locale.value = locale;
-  const actual = [
-    i18n.global.t("updater.downloading", { percent: 42 }),
-    i18n.global.t("updater.downloadingUnknown"),
-    i18n.global.t("updater.ready"),
-    i18n.global.t("updater.failed")
-  ];
-  i18n.global.locale.value = "en";
-  expect(actual).toEqual(expected);
+it.each(["zh-CN", "fr", "de"] as const)(
+  "keeps updater keys complete and non-empty for %s",
+  (locale) => {
+    const englishKeys = Object.keys(messages.en.updater).sort();
+    const localized = messages[locale].updater;
+
+    expect(Object.keys(localized).sort()).toEqual(englishKeys);
+    expect(
+      Object.values(localized).every(
+        (value) => typeof value === "string" && value.trim().length > 0
+      )
+    ).toBe(true);
+  }
+);
+
+it("keeps the English updater keys non-empty", () => {
+  expect(
+    Object.values(messages.en.updater).every(
+      (value) => value.trim().length > 0
+    )
+  ).toBe(true);
 });
 ```
 
@@ -1103,6 +1074,9 @@ expect(narrowMedia).toContain(
   ".top-bar--updating .top-bar__controls { gap: 3px;"
 );
 ```
+
+This updates the repository's existing CSS contract; it does not substitute
+for the real 320-pixel browser measurement in Task 7.
 
 - [ ] **Step 3: Run the component contracts and verify RED**
 
@@ -1318,7 +1292,7 @@ git commit -m "feat: show automatic update status"
 **Files:**
 
 - Modify: `src/App.vue`
-- Modify: `src/__tests__/App.spec.ts`
+- Create: `src/__tests__/AppUpdater.spec.ts`
 
 **Interfaces:**
 
@@ -1327,23 +1301,160 @@ git commit -m "feat: show automatic update status"
 - Produces: updater `stop()` during root unmount.
 - Produces: localized `UpdateConfirmationCopy` for ready installs.
 
-- [ ] **Step 1: Write the App lifecycle contract**
+- [ ] **Step 1: Write the mounted App integration contract**
 
-Add this test to `src/__tests__/App.spec.ts`:
+Create `src/__tests__/AppUpdater.spec.ts`. Mock only the external Tauri
+IPC/network/native-dialog boundary; mount the real `App`, `usePulse`,
+`useUpdater`, `TopBar`, and i18n:
 
 ```ts
-it("starts updates after the first snapshot and stops them on unmount", () => {
-  const source = readFileSync(resolve(process.cwd(), "src/App.vue"), "utf8");
-  const initialLoad = source.indexOf("await pulse.load();");
-  const updaterStart = source.indexOf("updater.start();");
+import { flushPromises, mount } from "@vue/test-utils";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi
+} from "vitest";
+import type { AppSnapshot } from "../types";
 
-  expect(source).toContain('import { useUpdater } from "./composables/useUpdater";');
-  expect(initialLoad).toBeGreaterThanOrEqual(0);
-  expect(updaterStart).toBeGreaterThan(initialLoad);
-  expect(source).toContain("updater.stop();");
-  expect(source).toContain(':update-state="updaterState"');
-  expect(source).toContain('@activate-update="activateUpdate"');
-  expect(source).not.toContain("pulse.error.value = updater");
+const boundary = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  listen: vi.fn(),
+  check: vi.fn(),
+  confirm: vi.fn(),
+  relaunch: vi.fn()
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: boundary.invoke,
+  isTauri: () => true
+}));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: boundary.listen
+}));
+vi.mock("@tauri-apps/plugin-updater", () => ({
+  check: boundary.check
+}));
+vi.mock("@tauri-apps/plugin-dialog", () => ({
+  confirm: boundary.confirm
+}));
+vi.mock("@tauri-apps/plugin-process", () => ({
+  relaunch: boundary.relaunch
+}));
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function snapshot(): AppSnapshot {
+  return {
+    sessions: [],
+    weeklyQuota: undefined,
+    isLoading: false,
+    initialization: { runId: 1, phase: "complete", events: [] },
+    monitoring: {
+      enabled: true,
+      needsRepair: false,
+      staleCount: 0
+    },
+    alwaysOnTop: false,
+    launchAtLogin: false,
+    locale: "en",
+    theme: "system"
+  };
+}
+
+async function mountApp() {
+  const [{ default: App }, { i18n }] = await Promise.all([
+    import("../App.vue"),
+    import("../i18n")
+  ]);
+  return mount(App, { global: { plugins: [i18n] } });
+}
+
+describe("App automatic updater integration", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    boundary.invoke.mockReset();
+    boundary.listen.mockReset().mockResolvedValue(() => undefined);
+    boundary.check.mockReset().mockResolvedValue(null);
+    boundary.confirm.mockReset().mockResolvedValue(true);
+    boundary.relaunch.mockReset().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
+  it("waits for the first snapshot, checks in production, and stops on unmount", async () => {
+    const firstSnapshot = deferred<AppSnapshot>();
+    boundary.invoke.mockImplementation((command: string) => {
+      if (command === "get_snapshot") return firstSnapshot.promise;
+      return Promise.resolve(undefined);
+    });
+    vi.stubEnv("PROD", true);
+    const wrapper = await mountApp();
+
+    await flushPromises();
+    expect(boundary.check).not.toHaveBeenCalled();
+
+    firstSnapshot.resolve(snapshot());
+    await flushPromises();
+    expect(boundary.check).toHaveBeenCalledTimes(1);
+
+    wrapper.unmount();
+    await vi.advanceTimersByTimeAsync(21_600_000);
+    expect(boundary.check).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not contact the updater outside a production build", async () => {
+    boundary.invoke.mockResolvedValue(snapshot());
+    vi.stubEnv("PROD", false);
+    const wrapper = await mountApp();
+
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(21_600_000);
+
+    expect(boundary.check).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it("renders a ready update and sends localized copy to the native dialog", async () => {
+    const update = {
+      version: "0.4.0",
+      download: vi.fn().mockResolvedValue(undefined),
+      install: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined)
+    };
+    boundary.invoke.mockResolvedValue(snapshot());
+    boundary.check.mockResolvedValue(update);
+    vi.stubEnv("PROD", true);
+    const wrapper = await mountApp();
+
+    await vi.waitFor(() =>
+      expect(wrapper.get(".top-bar__update").text()).toBe("Update")
+    );
+    await wrapper.get(".top-bar__update").trigger("click");
+    await flushPromises();
+
+    expect(boundary.confirm).toHaveBeenCalledWith(
+      "Version 0.4.0 is ready. Install it and restart Codex Pulse?",
+      { title: "Install Codex Pulse update", kind: "info" }
+    );
+    expect(update.install).toHaveBeenCalledWith({
+      restartAfterInstall: true
+    });
+    expect(boundary.relaunch).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
 });
 ```
 
@@ -1352,11 +1463,12 @@ it("starts updates after the first snapshot and stops them on unmount", () => {
 Run:
 
 ```bash
-pnpm test -- src/__tests__/App.spec.ts
+pnpm test -- src/__tests__/AppUpdater.spec.ts
 ```
 
-Expected: FAIL because App does not import, start, stop, render, or activate the
-updater.
+Expected: the production timing and ready-badge cases FAIL because App does not
+start, stop, render, or activate the real updater. The non-production case may
+already pass; the file remains RED overall for the intended missing behavior.
 
 - [ ] **Step 3: Wire the composable without coupling it to Pulse**
 
@@ -1405,17 +1517,18 @@ updater callbacks, and do not route updater errors into `pulse.error`.
 Run:
 
 ```bash
-pnpm test -- src/__tests__/App.spec.ts src/__tests__/useUpdater.spec.ts src/__tests__/TopBar.spec.ts
+pnpm test -- src/__tests__/AppUpdater.spec.ts src/__tests__/App.spec.ts src/__tests__/useUpdater.spec.ts src/__tests__/TopBar.spec.ts
 pnpm build
 ```
 
 Expected: all tests PASS, including the existing 60-second session fallback;
-the production bundle type-checks with updater lifecycle wiring.
+the mounted integration proves real lifecycle ordering and dialog copy, and the
+production bundle type-checks with updater lifecycle wiring.
 
 - [ ] **Step 5: Commit App integration**
 
 ```bash
-git add src/App.vue src/__tests__/App.spec.ts
+git add src/App.vue src/__tests__/AppUpdater.spec.ts
 git commit -m "feat: connect automatic updates to app lifecycle"
 ```
 
@@ -1740,7 +1853,7 @@ git commit -m "ci: publish signed updater manifests"
 - Produces: the two exact GitHub Secret names consumed by Task 5.
 - Preserves: the private key and passphrase as write-only external state.
 
-- [ ] **Step 1: Replace stale public-documentation assertions with updater contracts**
+- [ ] **Step 1: Replace only the stale release-status assertion**
 
 In `src/__tests__/githubCommunity.spec.ts`, replace the exact stale Draft
 phrases:
@@ -1750,33 +1863,18 @@ expect(english).toContain("unsigned experimental Draft Release artifact");
 expect(chinese).toContain("未签名的实验性草稿发布产物");
 ```
 
-with these aligned assertions:
+with these aligned public-status assertions:
 
 ```ts
-for (const phrase of [
-  "published unsigned experimental installer",
-  "checks GitHub Releases after startup and every six hours",
-  "downloads a signed installer automatically",
-  "does not send Codex transcripts, prompts, session data, quota data, or project paths",
-  "first updater-capable release must be installed manually",
-  "updater signature does not replace Apple notarization or Windows Authenticode"
-]) {
-  expect(english).toContain(phrase);
-}
-for (const phrase of [
-  "已发布的未签名实验性安装程序",
-  "启动后及每六小时检查一次 GitHub Releases",
-  "自动下载经过签名的安装程序",
-  "不会发送 Codex 转录、提示、会话数据、额度数据或项目路径",
-  "首个支持 updater 的版本仍须手动安装",
-  "updater 签名不能替代 Apple 公证或 Windows Authenticode"
-]) {
-  expect(chinese).toContain(phrase);
-}
+expect(english).toContain("published unsigned experimental installer");
+expect(english).not.toContain("unsigned experimental Draft Release artifact");
+expect(chinese).toContain("已发布的未签名实验性安装程序");
+expect(chinese).not.toContain("未签名的实验性草稿发布产物");
 ```
 
 Retain the existing unsigned, SmartScreen, Gatekeeper, WSL, and platform
-support checks.
+support checks. Do not add exact-phrase tests for the new human-facing privacy
+prose; the user explicitly approved that documentation-class test exception.
 
 - [ ] **Step 2: Run the documentation contract and verify RED**
 
@@ -1787,7 +1885,7 @@ pnpm test -- src/__tests__/githubCommunity.spec.ts
 ```
 
 Expected: FAIL because the READMEs still describe the Windows installer as a
-Draft and do not disclose updater behavior.
+Draft. The privacy prose is reviewed semantically in Steps 3-5.
 
 - [ ] **Step 3: Correct release status and add English disclosure**
 
@@ -1798,8 +1896,7 @@ In `README.md`:
 - retain the Apple/Windows trust warnings; and
 - add an `## Automatic Updates and Privacy` section after platform support.
 
-That section must state, using the exact tested phrases, that updater-capable
-production builds:
+That section must state that updater-capable production builds:
 
 1. check GitHub Releases after startup and every six hours;
 2. download a signed installer automatically and ask before install/restart;
@@ -1815,8 +1912,9 @@ Also state that ordinary request metadata is handled under GitHub's terms.
 - [ ] **Step 4: Mirror the same disclosure in Simplified Chinese**
 
 In `docs/README.zh-CN.md`, make the corresponding release-status changes and
-add `## 自动更新与隐私`. Use the exact tested Chinese phrases and retain the
-same six semantic claims and GitHub request-metadata qualification.
+add `## 自动更新与隐私`. Use the tested published-installer status phrase, then
+retain the same six semantic claims and GitHub request-metadata qualification.
+Translate the meaning rather than mechanically mirroring English word order.
 
 - [ ] **Step 5: Run aligned documentation tests to verify GREEN**
 
@@ -1827,6 +1925,11 @@ pnpm test -- src/__tests__/githubCommunity.spec.ts
 ```
 
 Expected: PASS with no stale Draft assertion.
+
+Then inspect the English and Chinese diff side by side and check the six claims
+from Steps 3-4 one by one. Confirm neither document implies that updater
+signatures remove Gatekeeper/SmartScreen requirements, that `0.3.2` already
+contains the updater, or that a failed update check affects session monitoring.
 
 - [ ] **Step 6: Write both signing values to GitHub Actions Secrets**
 
@@ -1919,7 +2022,71 @@ find "$UPDATER_BUNDLE_DIR" -maxdepth 1 -type f \( -name '*.app.tar.gz' -o -name 
 Expected: one `.app.tar.gz` and one `.app.tar.gz.sig`. This proves local
 artifact generation, not installation, restart, publication, or notarization.
 
-- [ ] **Step 3: Verify external names and repository hygiene**
+- [ ] **Step 3: Inspect the real 320-pixel TopBar layout**
+
+Start Vite on the loopback interface:
+
+```bash
+pnpm dev --host 127.0.0.1
+```
+
+Open `http://127.0.0.1:5180` in the in-app browser, set the viewport to
+`320x420`, and use the real rendered TopBar and loaded `src/styles.css`.
+Because development deliberately disables the updater, inject only the
+approved failed-badge DOM state in the browser inspector:
+
+```js
+const header = document.querySelector(".top-bar");
+const brand = document.querySelector(".top-bar__brand");
+const name = document.querySelector(".top-bar__name");
+const count = document.querySelector(".top-bar__count");
+if (!(header instanceof HTMLElement) ||
+    !(brand instanceof HTMLElement) ||
+    !(name instanceof HTMLElement)) {
+  throw new Error("TopBar is not rendered");
+}
+count?.remove();
+header.classList.add("top-bar--updating");
+const badge = document.createElement("button");
+badge.className = "top-bar__update top-bar__update--failed";
+badge.type = "button";
+badge.textContent = "Update failed";
+badge.setAttribute("aria-label", "Retry update");
+badge.setAttribute("aria-live", "polite");
+name.after(badge);
+const brandRect = brand.getBoundingClientRect();
+const controls = document.querySelector(".top-bar__controls");
+const mark = document.querySelector(".top-bar__mark");
+if (!(controls instanceof HTMLElement) || !(mark instanceof SVGElement)) {
+  throw new Error("TopBar controls or mark are not rendered");
+}
+const controlsRect = controls.getBoundingClientRect();
+({
+  viewportWidth: window.innerWidth,
+  documentWidth: document.documentElement.scrollWidth,
+  brandRight: brandRect.right,
+  controlsLeft: controlsRect.left,
+  overlap: brandRect.right > controlsRect.left,
+  fullName: name.textContent,
+  nameClipped: name.scrollWidth > name.clientWidth,
+  badgeClipped: badge.scrollWidth > badge.clientWidth,
+  markDisplay: getComputedStyle(mark).display
+});
+```
+
+Expected measured result:
+
+- `viewportWidth` and `documentWidth` are both `320`;
+- `overlap`, `nameClipped`, and `badgeClipped` are `false`;
+- `fullName` is `Codex Pulse`; and
+- `markDisplay` is `none`.
+
+Also inspect the real page once in light and dark mode for a readable badge and
+visible focus ring. This is manual browser evidence, separate from the
+component and CSS contracts. Stop the Vite process after recording the
+measurements.
+
+- [ ] **Step 4: Verify external names and repository hygiene**
 
 Run:
 
@@ -1939,13 +2106,14 @@ Expected: two Secret names, mode `600`, no tracked key file, no whitespace
 errors, detached HEAD, and only the intended automatic-update commits above
 `51fcaa6`.
 
-- [ ] **Step 4: Write the acceptance report from observed output**
+- [ ] **Step 5: Write the acceptance report from observed output**
 
 Create `docs/superpowers/reports/automatic-updates-acceptance.md` with:
 
 - exact detached HEAD and base commit;
 - each verification command, exit status, and observed test count;
 - exact macOS updater archive and `.sig` paths;
+- the 320-pixel browser measurements and light/dark/focus observations;
 - the two GitHub Secret names and their observed update timestamps, never
   values;
 - confirmation that all three version files remain `0.3.2`;
@@ -1964,13 +2132,13 @@ Create `docs/superpowers/reports/automatic-updates-acceptance.md` with:
 Do not mark any pending item complete based only on a local command or static
 workflow test.
 
-- [ ] **Step 5: Re-run affected checks if the report follows a verification fix**
+- [ ] **Step 6: Re-run affected checks if the report follows a verification fix**
 
-If any defect was fixed during Steps 1-3, rerun its focused RED/GREEN test,
+If any defect was fixed during Steps 1-4, rerun its focused RED/GREEN test,
 then rerun all four commands from Step 1 and the signed bundle check from Step
 2. The acceptance report must cite only the final fresh run.
 
-- [ ] **Step 6: Commit the verified evidence and inspect final state**
+- [ ] **Step 7: Commit the verified evidence and inspect final state**
 
 ```bash
 git add docs/superpowers/reports/automatic-updates-acceptance.md
