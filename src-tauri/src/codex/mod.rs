@@ -1,3 +1,4 @@
+pub mod app_server;
 pub mod discovery;
 pub mod jsonl;
 pub mod rate_limits;
