@@ -51,6 +51,12 @@ describe("footer layout", () => {
     );
   });
 
+  it("keeps the nested initialization status transparent in dark mode", () => {
+    expect(stylesheet).toContain(
+      ':root[data-theme="dark"] .footer-stack .initialization-status-row { background: transparent; }',
+    );
+  });
+
   it("stretches the bottom-anchored footer only while a background event is visible", () => {
     expect(rule(".footer-stack")).toContain("max-height: 48px;");
     expect(rule(".footer-stack")).toContain("transition: max-height");
