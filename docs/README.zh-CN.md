@@ -12,7 +12,7 @@ Codex Pulse 是用于观察活跃 Codex 任务的轻量 macOS 与 Windows 桌面
 > Codex Pulse 是独立社区项目，与 OpenAI 无隶属关系，也未获得其认可。
 
 > [!WARNING]
-> 当前发布的 macOS 构建属于实验性产物，未使用 Developer ID 签名，也未经过 Apple 公证，因此尚不支持常规的 Gatekeeper 安装流程。Windows NSIS 安装程序是未签名的实验性草稿发布产物。请勿绕过 SmartScreen 或企业安全策略。当前推荐从源码构建。
+> 当前发布的 macOS 构建属于实验性产物，未使用 Developer ID 签名，也未经过 Apple 公证，因此尚不支持常规的 Gatekeeper 安装流程。Windows NSIS 是已发布的未签名实验性安装程序。请勿绕过 SmartScreen、Gatekeeper 或企业安全策略；若相关策略不允许使用这些产物，请从源码构建。
 
 ## 功能
 
@@ -26,11 +26,19 @@ Codex Pulse 是用于观察活跃 Codex 任务的轻量 macOS 与 Windows 桌面
 
 | 环境 | 状态 |
 | --- | --- |
-| macOS ARM64 | 现有实验性 DMG |
-| Windows 11 x64 原生 Codex | `0.3.0` MVP，未签名的实验性草稿发布 NSIS |
+| macOS ARM64 | 已发布的实验性 `0.3.2` DMG |
+| Windows 11 x64 原生 Codex | 已发布的实验性 `0.3.2` NSIS，未签名 |
 | WSL、Windows ARM64、Windows 10 | 不支持 |
 
 Windows 支持要求使用原生 Codex 应用和原生 Windows Codex 数据；不支持也不会转换 WSL 会话或路径。该 MVP 不支持原生 Mica 或 Acrylic，保留的是现有 CSS 半透明表面。原生 Windows 安装产物和交互式桌面 UX 证据仍为 `pending-user-eyeball`；仅有已检入的工作流不能证明 GitHub Actions 已经验证 Windows。
+
+## 自动更新与隐私
+
+版本 `0.3.2` 尚不包含自动更新功能。手动安装首个支持更新的生产版本后，Codex Pulse 会在启动后以及此后每六小时检查一次 GitHub Releases。发现新版本时，应用会自动下载带更新签名的安装程序，并在安装和重启 Codex Pulse 前征求确认。
+
+更新请求不会发送 Codex 转录、提示词、会话数据、额度数据或项目路径；GitHub 仍会依照其条款与隐私政策处理常规请求元数据。更新检查失败与本地会话监控相互隔离，不会影响会话监控继续正常运行。
+
+首个支持更新的版本必须手动安装，之后才能建立自动升级路径。更新签名用于验证发布产物的完整性，但不能替代 Apple 公证或 Windows Authenticode；Gatekeeper、SmartScreen 与企业安全策略仍然适用。
 
 ## 环境要求
 

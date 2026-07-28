@@ -74,7 +74,10 @@ describe("GitHub community configuration", () => {
     expect(english).toContain("native Codex");
     expect(english).toMatch(/WSL.*Unsupported/);
     expect(english).toContain("unsigned");
-    expect(english).toContain("unsigned experimental Draft Release artifact");
+    expect(english).toContain("published unsigned experimental installer");
+    expect(english).not.toContain(
+      "unsigned experimental Draft Release artifact",
+    );
     expect(english).toContain("does not support native Mica or Acrylic");
     expect(english).toContain("CSS translucent surfaces");
     expect(english).toContain("pending-user-eyeball");
@@ -87,7 +90,8 @@ describe("GitHub community configuration", () => {
     expect(chinese).toContain("原生 Codex");
     expect(chinese).toMatch(/WSL.*不支持/);
     expect(chinese).toContain("未签名");
-    expect(chinese).toContain("未签名的实验性草稿发布产物");
+    expect(chinese).toContain("已发布的未签名实验性安装程序");
+    expect(chinese).not.toContain("未签名的实验性草稿发布产物");
     expect(chinese).toContain("不支持原生 Mica 或 Acrylic");
     expect(chinese).toContain("CSS 半透明表面");
     expect(chinese).toContain("pending-user-eyeball");
