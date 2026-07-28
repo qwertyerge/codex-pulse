@@ -112,6 +112,9 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .maximizable(platform_policy.maximizable)
         .build()?;
 
+    #[cfg(target_os = "windows")]
+    crate::windows_window::install_maximize_width_constraint(&window)?;
+
     if platform_policy.maximize_on_create {
         let _ = window.maximize();
     }
