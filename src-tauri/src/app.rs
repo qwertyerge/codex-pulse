@@ -78,7 +78,7 @@ struct MainWindowPlatformPolicy {
 fn main_window_platform_policy(target_os: &str) -> MainWindowPlatformPolicy {
     if target_os == "windows" {
         MainWindowPlatformPolicy {
-            maximizable: false,
+            maximizable: true,
             maximize_on_create: false,
         }
     } else {
@@ -160,10 +160,10 @@ mod tests {
     }
 
     #[test]
-    fn windows_main_window_starts_compact_and_cannot_maximize() {
+    fn windows_main_window_starts_compact_and_can_maximize() {
         let policy = main_window_platform_policy("windows");
 
-        assert!(!policy.maximizable);
+        assert!(policy.maximizable);
         assert!(!policy.maximize_on_create);
     }
 
