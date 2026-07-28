@@ -2,6 +2,8 @@ use std::sync::{
     atomic::{AtomicI64, AtomicU8, Ordering},
     Mutex, RwLock,
 };
+#[cfg(debug_assertions)]
+use std::time::Instant;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -500,6 +502,8 @@ fn start_refresh(app: tauri::AppHandle) {
         let result = tauri::async_runtime::spawn_blocking(move || {
             let state = app_for_scan.state::<AppState>();
             let now_ms = Utc::now().timestamp_millis();
+            #[cfg(debug_assertions)]
+            let refresh_started_at = Instant::now();
             publish_initialization_event(
                 &app_for_scan,
                 &state,
@@ -514,6 +518,8 @@ fn start_refresh(app: tauri::AppHandle) {
                 InitializationPhase::ReconcilingSessions,
                 "Reconciling active Codex sessions",
             );
+            #[cfg(debug_assertions)]
+            let sessions_started_at = Instant::now();
             let mut scan = {
                 let mut scan_cache = state
                     .scan_cache
@@ -521,9 +527,20 @@ fn start_refresh(app: tauri::AppHandle) {
                     .map_err(|_| anyhow::anyhow!("Codex Pulse scan cache lock is poisoned"))?;
                 scan_active_sessions_with_cache(&codex_home, now_ms, &mut scan_cache)?
             };
+            #[cfg(debug_assertions)]
+            let sessions_elapsed = sessions_started_at.elapsed();
+            #[cfg(debug_assertions)]
+            let git_started_at = Instant::now();
             if let Ok(mut enricher) = state.git_enricher.lock() {
                 enricher.enrich(&mut scan.sessions, now_ms);
             }
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "Codex Pulse refresh timings: sessions={}ms git={}ms total={}ms",
+                sessions_elapsed.as_millis(),
+                git_started_at.elapsed().as_millis(),
+                refresh_started_at.elapsed().as_millis()
+            );
             Ok::<_, anyhow::Error>(scan)
         })
         .await;
