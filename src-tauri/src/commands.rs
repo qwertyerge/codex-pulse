@@ -41,6 +41,7 @@ pub struct AppState {
     initialization: Mutex<InitializationFeed>,
     recent_event_display: Mutex<HashMap<String, DisplayedRecentEvent>>,
     recent_event_wakeup: DeadlineWakeup,
+    hook_settle_wakeup: DeadlineWakeup,
     refresh_gate: RefreshGate,
 }
 
@@ -52,6 +53,7 @@ struct CachedSnapshot {
 
 const RECENT_EVENT_COALESCE_MS: i64 = 5_000;
 const OFFICIAL_QUOTA_MAX_AGE_MS: i64 = 5 * 60 * 1_000;
+const HOOK_SETTLE_DELAY_MS: i64 = 2_000;
 pub const FALLBACK_RECONCILIATION_SECONDS: u64 = 60;
 const REFRESH_IDLE: u8 = 0;
 const REFRESH_RUNNING: u8 = 1;
@@ -166,6 +168,27 @@ impl DeadlineWakeup {
             .is_ok()
     }
 
+    /// Moves a single trailing wakeup later without creating another worker.
+    fn arm_latest(&self, deadline_ms: i64) -> bool {
+        loop {
+            let current = self.0.load(Ordering::Acquire);
+            if current >= deadline_ms {
+                return false;
+            }
+            if self
+                .0
+                .compare_exchange(current, deadline_ms, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return current == 0;
+            }
+        }
+    }
+
+    fn deadline(&self) -> i64 {
+        self.0.load(Ordering::Acquire)
+    }
+
     fn clear(&self) {
         self.0.store(0, Ordering::Release);
     }
@@ -201,6 +224,7 @@ impl AppState {
             initialization: Mutex::new(InitializationFeed::default()),
             recent_event_display: Mutex::new(HashMap::new()),
             recent_event_wakeup: DeadlineWakeup::default(),
+            hook_settle_wakeup: DeadlineWakeup::default(),
             refresh_gate: RefreshGate::default(),
         }
     }
@@ -486,6 +510,57 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
     start_refresh(app);
 }
 
+/// Refreshes immediately, then once more after Codex has had time to flush its transcript.
+///
+/// `UserPromptSubmit` runs before the corresponding JSONL record is guaranteed to be visible.
+/// Repeated hook notifications move one trailing worker later instead of spawning one per hook.
+pub fn schedule_hook_refresh(app: tauri::AppHandle) {
+    schedule_refresh(app.clone());
+
+    let observed_at_ms = Utc::now().timestamp_millis();
+    let deadline_ms = observed_at_ms.saturating_add(HOOK_SETTLE_DELAY_MS);
+    let should_start_worker = app
+        .state::<AppState>()
+        .hook_settle_wakeup
+        .arm_latest(deadline_ms);
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "Codex Pulse hook notification: observed_at={observed_at_ms} settle_deadline={deadline_ms}"
+    );
+
+    if !should_start_worker {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let deadline_ms = app.state::<AppState>().hook_settle_wakeup.deadline();
+            if deadline_ms == 0 {
+                return;
+            }
+
+            let wait_ms = deadline_ms
+                .saturating_sub(Utc::now().timestamp_millis())
+                .max(0) as u64;
+            tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+
+            let claimed = app
+                .state::<AppState>()
+                .hook_settle_wakeup
+                .claim(deadline_ms);
+            if !claimed {
+                continue;
+            }
+
+            #[cfg(debug_assertions)]
+            eprintln!("Codex Pulse hook settle refresh: deadline={deadline_ms}");
+            schedule_refresh(app);
+            return;
+        }
+    });
+}
+
 fn start_refresh(app: tauri::AppHandle) {
     let state = app.state::<AppState>();
     begin_initialization(&app, &state, Utc::now().timestamp_millis());
@@ -714,7 +789,7 @@ mod tests {
     use super::{
         coalesce_recent_events, set_always_on_top_config, set_locale_config, validate_external_url,
         validate_project_path, AppState, DeadlineWakeup, RefreshGate,
-        FALLBACK_RECONCILIATION_SECONDS,
+        FALLBACK_RECONCILIATION_SECONDS, HOOK_SETTLE_DELAY_MS,
     };
     use crate::config::ConfigStore;
     use crate::model::{
@@ -813,6 +888,22 @@ mod tests {
         wakeup.clear();
         assert!(!wakeup.claim(15_000));
         assert!(wakeup.arm_earliest(20_000));
+    }
+
+    #[test]
+    fn deadline_wakeup_moves_a_trailing_timer_to_the_latest_deadline() {
+        let wakeup = DeadlineWakeup::default();
+
+        assert!(wakeup.arm_latest(15_000));
+        assert!(!wakeup.arm_latest(16_000));
+        assert!(!wakeup.arm_latest(14_000));
+        assert!(!wakeup.claim(15_000));
+        assert!(wakeup.claim(16_000));
+    }
+
+    #[test]
+    fn hook_refresh_waits_two_seconds_for_the_transcript_to_settle() {
+        assert_eq!(HOOK_SETTLE_DELAY_MS, 2_000);
     }
 
     #[test]
