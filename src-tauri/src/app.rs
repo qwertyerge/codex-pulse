@@ -12,12 +12,15 @@ pub fn product_name() -> &'static str {
     "Codex Pulse"
 }
 
-pub fn run() -> anyhow::Result<()> {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+fn register_updater_plugins<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+}
+
+pub fn run() -> anyhow::Result<()> {
+    register_updater_plugins(tauri::Builder::default().plugin(tauri_plugin_opener::init()))
         .plugin(tauri_plugin_liquid_glass::init())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             crate::tray::show_main_window(app);
@@ -129,9 +132,77 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use tauri::{LogicalUnit, PixelUnit};
+    use tauri::{
+        ipc::CallbackFn,
+        test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY},
+        utils::acl::ExecutionContext,
+        webview::InvokeRequest,
+        LogicalUnit, PixelUnit, WebviewWindowBuilder,
+    };
 
-    use super::{main_window_platform_policy, main_window_size_constraints};
+    use super::{
+        main_window_platform_policy, main_window_size_constraints, register_updater_plugins,
+    };
+
+    #[test]
+    fn production_builder_registers_updater_plugin_commands() {
+        const COMMANDS: [&str; 3] = [
+            "plugin:dialog|message",
+            "plugin:process|exit",
+            "plugin:updater|download",
+        ];
+
+        let mut context = mock_context(noop_assets());
+        context
+            .config_mut()
+            .plugins
+            .0
+            .insert("updater".into(), serde_json::json!({ "pubkey": "" }));
+        for command in COMMANDS {
+            context
+                .runtime_authority_mut()
+                .__allow_command(command.into(), ExecutionContext::Local);
+        }
+        let app = register_updater_plugins(mock_builder())
+            .build(context)
+            .expect("mock app should build with production updater plugins");
+        let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview should build");
+        let local_url = if cfg!(any(windows, target_os = "android")) {
+            "http://tauri.localhost"
+        } else {
+            "tauri://localhost"
+        };
+
+        for command in COMMANDS {
+            let response = get_ipc_response(
+                &webview,
+                InvokeRequest {
+                    cmd: command.into(),
+                    callback: CallbackFn(0),
+                    error: CallbackFn(1),
+                    url: local_url.parse().expect("local invoke URL should parse"),
+                    body: serde_json::json!({}).into(),
+                    headers: Default::default(),
+                    invoke_key: INVOKE_KEY.to_string(),
+                },
+            );
+            let error = response.expect_err("malformed command arguments should fail");
+            let message = error
+                .as_str()
+                .expect("IPC rejection should be a string message");
+
+            assert!(
+                message.contains("missing required key") || message.contains("invalid args"),
+                "registered malformed command should reject its arguments, got: {message}"
+            );
+            assert!(
+                !message.contains("not found"),
+                "production plugin command was not registered: {message}"
+            );
+        }
+    }
 
     #[test]
     fn main_window_uses_pd_measured_bounds() {

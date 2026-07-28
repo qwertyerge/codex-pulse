@@ -12,6 +12,7 @@
 
 - Keep `UPDATE_CHECK_INTERVAL_MS` exactly `21_600_000`; do not change update cadence.
 - Keep `@tauri-apps/plugin-updater` and `tauri-plugin-updater` at `2.10.1`; add no dependency.
+- Enable Tauri's empty `test` feature only through `[dev-dependencies]`; do not expose `tauri::test` in ordinary production builds.
 - `UpdateCandidate.install` must be exactly `install(): Promise<void>`, followed by the existing explicit process-plugin relaunch.
 - `stop()` invalidates pending work, returns visible state to `idle`, closes a retained candidate, and still allows a fresh later `start()`.
 - An installer call that began before `stop()` may finish, but its stale continuation must not mutate state, close a newer candidate, or relaunch.
@@ -34,7 +35,9 @@
 | `src/__tests__/useUpdater.spec.ts` | Prove the zero-argument install call and all stop/restart race boundaries. |
 | `src/__tests__/AppUpdater.spec.ts` | Prove the production Vue/Tauri integration forwards no unsupported install options. |
 | `docs/superpowers/plans/2026-07-28-automatic-updates.md` | Keep the earlier executable snippets aligned with the corrected contract and lifecycle. |
+| `src-tauri/Cargo.toml` | Enable the existing Tauri crate's test-only MockRuntime API for Rust test targets. |
 | `src-tauri/src/app.rs` | Share native updater-related plugin registration and probe it through MockRuntime IPC. |
+| `docs/superpowers/plans/2026-07-28-updater-review-hardening.md` | Record the approved test-feature correction discovered during the Task 3 RED run. |
 | `docs/superpowers/reports/automatic-updates-acceptance.md` | Preserve historical evidence and append fresh review-hardening verification. |
 | PR #17 inline review threads | Record the disposition of all eight comments in their original threads. |
 
@@ -605,11 +608,14 @@ Expected: the commit contains only the three listed files and all five new regre
 
 **Files:**
 
+- Modify: `src-tauri/Cargo.toml:40-42`
 - Modify: `src-tauri/src/app.rs:1-50,123-173`
+- Modify: `docs/superpowers/plans/2026-07-28-updater-review-hardening.md:12-45,606-740`
 
 **Interfaces:**
 
 - Consumes: `tauri::Builder<R>` for any `R: tauri::Runtime`.
+- Consumes: the existing Tauri 2 dependency with its empty `test` feature enabled only for dev/test targets.
 - Produces: private `register_updater_plugins<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R>`.
 - Registers exactly: dialog, process, and updater plugins in their existing order.
 - Probes: `plugin:dialog|message`, `plugin:process|exit`, and `plugin:updater|download`.
@@ -622,6 +628,7 @@ Extend the `tests` module imports in `src-tauri/src/app.rs` and add:
 use tauri::{
     ipc::CallbackFn,
     test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY},
+    utils::acl::ExecutionContext,
     webview::InvokeRequest,
     LogicalUnit, PixelUnit, WebviewWindowBuilder,
 };
@@ -632,8 +639,25 @@ use super::{
 
 #[test]
 fn production_builder_registers_updater_plugin_commands() {
+    const COMMANDS: [&str; 3] = [
+        "plugin:dialog|message",
+        "plugin:process|exit",
+        "plugin:updater|download",
+    ];
+
+    let mut context = mock_context(noop_assets());
+    context
+        .config_mut()
+        .plugins
+        .0
+        .insert("updater".into(), serde_json::json!({ "pubkey": "" }));
+    for command in COMMANDS {
+        context
+            .runtime_authority_mut()
+            .__allow_command(command.into(), ExecutionContext::Local);
+    }
     let app = register_updater_plugins(mock_builder())
-        .build(mock_context(noop_assets()))
+        .build(context)
         .expect("mock app should build with production updater plugins");
     let webview = WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()
@@ -644,11 +668,7 @@ fn production_builder_registers_updater_plugin_commands() {
         "tauri://localhost"
     };
 
-    for command in [
-        "plugin:dialog|message",
-        "plugin:process|exit",
-        "plugin:updater|download",
-    ] {
+    for command in COMMANDS {
         let response = get_ipc_response(
             &webview,
             InvokeRequest {
@@ -678,7 +698,16 @@ fn production_builder_registers_updater_plugin_commands() {
 }
 ```
 
-The empty object omits `message`, `code`, and `rid`/`onEvent`, so each command must fail during argument decoding before opening a dialog, exiting, or contacting an updater endpoint.
+The minimal mock updater config is required because Tauri's default
+`mock_context()` represents plugin configuration as `null`, while the updater
+plugin requires an object with `pubkey`. Its empty endpoint list cannot contact
+the network. The same mock context starts with `Resolved::default()`, so the
+test explicitly allows only these three local command strings through
+`runtime_authority_mut().__allow_command`. Each IPC body then omits `message`,
+`code`, and `rid`/`onEvent`, so the commands must fail during argument decoding
+before opening a dialog, exiting, or contacting an updater endpoint. If a
+plugin registration is removed, the allowlist remains but the plugin manager
+returns command-not-found.
 
 - [ ] **Step 2: Run the focused Rust test and verify RED**
 
@@ -688,9 +717,31 @@ Run:
 cargo test --manifest-path src-tauri/Cargo.toml app::tests::production_builder_registers_updater_plugin_commands -- --exact
 ```
 
-Expected: compilation fails because `register_updater_plugins` does not yet exist. Do not weaken the test to register plugins directly inside the test.
+Expected on the first run: compilation reports that `tauri::test` is gated
+behind `feature = "test"` and that `register_updater_plugins` does not exist.
+This proves both the missing test-only feature and the intended production
+registration gap. Do not weaken the test to register plugins directly inside
+the test.
 
-- [ ] **Step 3: Extract the generic production registration helper**
+- [ ] **Step 3: Enable Tauri MockRuntime only for dev/test targets and reconfirm RED**
+
+Add to `[dev-dependencies]` in `src-tauri/Cargo.toml`:
+
+```toml
+tauri = { version = "2", features = ["test"] }
+```
+
+Run:
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml app::tests::production_builder_registers_updater_plugin_commands -- --exact
+```
+
+Expected: the `tauri::test` gate error is gone and compilation now fails only
+because `register_updater_plugins` does not exist. The existing normal
+dependency's version/features remain unchanged, and Cargo adds no new crate.
+
+- [ ] **Step 4: Extract the generic production registration helper**
 
 Add above `run()`:
 
@@ -720,7 +771,7 @@ pub fn run() -> anyhow::Result<()> {
 
 Leave the existing `.manage`, `.setup`, `.invoke_handler`, `.run`, and error mapping unchanged.
 
-- [ ] **Step 4: Run focused and full verification**
+- [ ] **Step 5: Run focused and full verification**
 
 Run:
 
@@ -741,19 +792,22 @@ Expected:
 - Rust reports 82 unit tests, with auxiliary and doc-test targets also passing;
 - every command exits `0`.
 
-- [ ] **Step 5: Review and commit the native regression**
+- [ ] **Step 6: Review and commit the native regression**
 
 Run:
 
 ```bash
-git diff -- src-tauri/src/app.rs
-git add src-tauri/src/app.rs
+git diff -- src-tauri/Cargo.toml src-tauri/src/app.rs docs/superpowers/plans/2026-07-28-updater-review-hardening.md
+git add src-tauri/Cargo.toml src-tauri/src/app.rs docs/superpowers/plans/2026-07-28-updater-review-hardening.md
 git diff --cached --check
 git commit -m "test: cover native updater plugin registration"
 git rev-parse HEAD
 ```
 
-Expected: one-file commit. Preserve the full 40-character `git rev-parse HEAD` output for the acceptance addendum; this is the verified implementation commit, not the later evidence-only commit.
+Expected: the commit contains only the test-only feature, shared
+registration/test, and approved plan correction. Preserve the full
+40-character `git rev-parse HEAD` output for the acceptance addendum; this is
+the verified implementation commit, not the later evidence-only commit.
 
 ---
 
