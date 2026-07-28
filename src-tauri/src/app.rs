@@ -40,6 +40,7 @@ pub fn run() -> anyhow::Result<()> {
                         "Live hook listener unavailable: {error:#}"
                     ));
             }
+            crate::commands::start_official_quota_monitor(app.handle().clone());
             crate::commands::start_fallback_reconciliation(app.handle().clone());
             Ok(())
         })

@@ -24,7 +24,8 @@ use crate::model::{
     AppSnapshot, InitializationPhase, InitializationSnapshot, LocaleMode, MonitoringView,
     RecentEvent, SessionSnapshot, ThemeMode, WeeklyQuota,
 };
-use crate::monitor::{scan_active_sessions_with_cache, QuotaSourceCache};
+use crate::monitor::scan_active_sessions_with_cache;
+use crate::quota_monitor::{spawn_quota_monitor, QuotaMonitorEvent, QuotaRefreshHandle};
 
 pub struct AppState {
     pub codex_home: PathBuf,
@@ -34,7 +35,7 @@ pub struct AppState {
     cached_snapshot: RwLock<CachedSnapshot>,
     scan_cache: Mutex<ScanCache>,
     git_enricher: Mutex<GitSessionEnricher<GitRepositoryResolver<ProcessGitRunner>>>,
-    quota_source_cache: Mutex<QuotaSourceCache>,
+    quota_refresh: Mutex<Option<QuotaRefreshHandle>>,
     initialization: Mutex<InitializationFeed>,
     recent_event_display: Mutex<HashMap<String, DisplayedRecentEvent>>,
     refresh_in_flight: AtomicBool,
@@ -47,6 +48,7 @@ struct CachedSnapshot {
 }
 
 const RECENT_EVENT_COALESCE_MS: i64 = 5_000;
+const OFFICIAL_QUOTA_MAX_AGE_MS: i64 = 5 * 60 * 1_000;
 pub const FALLBACK_RECONCILIATION_SECONDS: u64 = 60;
 
 #[derive(Debug, Clone)]
@@ -75,7 +77,7 @@ impl AppState {
             cached_snapshot: RwLock::new(CachedSnapshot::default()),
             scan_cache: Mutex::new(ScanCache::default()),
             git_enricher: Mutex::new(GitSessionEnricher::new(resolver, cache)),
-            quota_source_cache: Mutex::new(QuotaSourceCache::default()),
+            quota_refresh: Mutex::new(None),
             initialization: Mutex::new(InitializationFeed::default()),
             recent_event_display: Mutex::new(HashMap::new()),
             refresh_in_flight: AtomicBool::new(false),
@@ -117,6 +119,26 @@ impl AppState {
             .lock()
             .map(|feed| feed.snapshot())
             .unwrap_or_default()
+    }
+
+    fn install_quota_refresh(&self, handle: QuotaRefreshHandle) {
+        if let Ok(mut current) = self.quota_refresh.lock() {
+            *current = Some(handle);
+        }
+    }
+
+    fn request_quota_refresh(&self) {
+        if let Ok(current) = self.quota_refresh.lock() {
+            if let Some(handle) = current.as_ref() {
+                handle.request_refresh();
+            }
+        }
+    }
+
+    fn observe_weekly_quota(&self, quota: WeeklyQuota) {
+        if let Ok(mut cached) = self.cached_snapshot.write() {
+            cached.weekly_quota = Some(quota);
+        }
     }
 }
 
@@ -187,16 +209,18 @@ fn coalesce_recent_events(
     }
 }
 
+fn replace_cached_sessions(state: &AppState, sessions: Vec<SessionSnapshot>) {
+    if let Ok(mut cached) = state.cached_snapshot.write() {
+        cached.sessions = sessions;
+    }
+}
+
 pub fn snapshot_for_home(codex_home: &Path, now_ms: i64) -> Result<AppSnapshot> {
     let mut scan_cache = ScanCache::default();
     let scan = scan_active_sessions_with_cache(codex_home, now_ms, &mut scan_cache)?;
-    let mut quota_source_cache = QuotaSourceCache::default();
-    let weekly_quota = quota_source_cache
-        .latest_weekly_quota(codex_home, now_ms)
-        .or(scan.weekly_quota);
     Ok(AppSnapshot {
         sessions: scan.sessions,
-        weekly_quota,
+        weekly_quota: None,
         is_loading: false,
         initialization: InitializationSnapshot::default(),
         monitoring: MonitoringView {
@@ -257,11 +281,15 @@ pub fn set_locale(locale: LocaleMode, state: State<'_, AppState>) -> Result<Loca
 
 #[tauri::command]
 pub fn get_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
-    snapshot_for_state(&state)
+    snapshot_for_state_at(&state, Utc::now().timestamp_millis())
 }
 
-fn snapshot_for_state(state: &AppState) -> Result<AppSnapshot, String> {
+fn snapshot_for_state_at(state: &AppState, now_ms: i64) -> Result<AppSnapshot, String> {
     let (sessions, weekly_quota) = state.cached_snapshot();
+    let weekly_quota = weekly_quota.filter(|quota| {
+        quota.resets_at_ms > now_ms
+            && now_ms.saturating_sub(quota.observed_at_ms) <= OFFICIAL_QUOTA_MAX_AGE_MS
+    });
     let mut snapshot = AppSnapshot {
         sessions,
         weekly_quota,
@@ -296,29 +324,24 @@ fn snapshot_for_state(state: &AppState) -> Result<AppSnapshot, String> {
 /// Runs the expensive JSONL/SQLite reconciliation away from the WebView invoke path.
 pub fn schedule_refresh(app: tauri::AppHandle) {
     let state = app.state::<AppState>();
+    state.request_quota_refresh();
     if state.refresh_in_flight.swap(true, Ordering::AcqRel) {
         return;
     }
     begin_initialization(&app, &state, Utc::now().timestamp_millis());
+    publish_initialization_event(
+        &app,
+        &state,
+        Utc::now().timestamp_millis(),
+        InitializationPhase::ReadingQuota,
+        "Requesting official weekly quota",
+    );
     let codex_home = state.codex_home.clone();
     let app_for_scan = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = tauri::async_runtime::spawn_blocking(move || {
             let state = app_for_scan.state::<AppState>();
             let now_ms = Utc::now().timestamp_millis();
-            publish_initialization_event(
-                &app_for_scan,
-                &state,
-                Utc::now().timestamp_millis(),
-                InitializationPhase::ReadingQuota,
-                "Reading bounded weekly quota observations",
-            );
-            let mut quota_source_cache = state
-                .quota_source_cache
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Codex Pulse quota source cache lock is poisoned"))?;
-            let weekly_quota = quota_source_cache.latest_weekly_quota(&codex_home, now_ms);
-            drop(quota_source_cache);
             publish_initialization_event(
                 &app_for_scan,
                 &state,
@@ -343,7 +366,6 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
             if let Ok(mut enricher) = state.git_enricher.lock() {
                 enricher.enrich(&mut scan.sessions, now_ms);
             }
-            scan.weekly_quota = weekly_quota.or(scan.weekly_quota);
             Ok::<_, anyhow::Error>(scan)
         })
         .await;
@@ -357,10 +379,7 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
                         Utc::now().timestamp_millis(),
                     );
                 }
-                if let Ok(mut cached) = state.cached_snapshot.write() {
-                    cached.sessions = scan.sessions;
-                    cached.weekly_quota = scan.weekly_quota;
-                }
+                replace_cached_sessions(&state, scan.sessions);
                 publish_initialization_event(
                     &app,
                     &state,
@@ -386,6 +405,23 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
         }
         state.refresh_in_flight.store(false, Ordering::Release);
         let _ = app.emit(crate::hook::SESSIONS_CHANGED_EVENT, ());
+    });
+}
+
+pub fn start_official_quota_monitor(app: tauri::AppHandle) {
+    let (updates_tx, mut updates_rx) = tokio::sync::mpsc::unbounded_channel();
+    let handle = spawn_quota_monitor(updates_tx);
+    app.state::<AppState>().install_quota_refresh(handle);
+
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = updates_rx.recv().await {
+            match event {
+                QuotaMonitorEvent::Observed(quota) => {
+                    app.state::<AppState>().observe_weekly_quota(quota);
+                    let _ = app.emit(crate::hook::SESSIONS_CHANGED_EVENT, ());
+                }
+            }
+        }
     });
 }
 
@@ -497,7 +533,9 @@ mod tests {
         validate_project_path, AppState, FALLBACK_RECONCILIATION_SECONDS,
     };
     use crate::config::ConfigStore;
-    use crate::model::{LocaleMode, RecentEvent, RecentEventPriority, SessionSnapshot};
+    use crate::model::{
+        LocaleMode, RecentEvent, RecentEventPriority, SessionSnapshot, WeeklyQuota,
+    };
 
     fn session(event: Option<RecentEvent>) -> SessionSnapshot {
         SessionSnapshot {
@@ -626,7 +664,8 @@ mod tests {
         .unwrap();
 
         state.set_monitoring_degraded_reason("Live hook listener unavailable: pipe is busy".into());
-        let snapshot = super::snapshot_for_state(&state).unwrap();
+        let snapshot =
+            super::snapshot_for_state_at(&state, chrono::Utc::now().timestamp_millis()).unwrap();
         assert_eq!(
             snapshot.monitoring.degraded_reason.as_deref(),
             Some("Live hook listener unavailable: pipe is busy")
@@ -650,7 +689,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_for_home_exposes_the_latest_weekly_quota() {
+    fn transcript_quota_does_not_supply_the_official_snapshot() {
         let temp = tempfile::tempdir().unwrap();
         let sessions = temp.path().join("sessions/2026/07/17");
         std::fs::create_dir_all(&sessions).unwrap();
@@ -666,14 +705,79 @@ mod tests {
 
         let snapshot = super::snapshot_for_home(temp.path(), 1_784_272_200_000).unwrap();
 
-        assert_eq!(snapshot.weekly_quota.as_ref().unwrap().used_percent, 81);
-        assert_eq!(
-            snapshot.weekly_quota.as_ref().unwrap().remaining_percent,
-            19
-        );
-        assert_eq!(
-            snapshot.weekly_quota.as_ref().unwrap().resets_at_ms,
-            1_784_870_653_000
-        );
+        assert!(snapshot.weekly_quota.is_none());
+    }
+
+    fn state_with_quota(quota: WeeklyQuota) -> (tempfile::TempDir, AppState) {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::new(
+            temp.path().to_owned(),
+            ConfigStore::new(temp.path().join("config.json")),
+        )
+        .unwrap();
+        state.cached_snapshot.write().unwrap().weekly_quota = Some(quota);
+        (temp, state)
+    }
+
+    #[test]
+    fn fresh_unexpired_official_quota_is_visible() {
+        let now_ms = 1_000_000;
+        let (_temp, state) = state_with_quota(WeeklyQuota {
+            used_percent: 5,
+            remaining_percent: 95,
+            resets_at_ms: now_ms + 60_000,
+            observed_at_ms: now_ms - 1_000,
+        });
+
+        let snapshot = super::snapshot_for_state_at(&state, now_ms).unwrap();
+
+        assert_eq!(snapshot.weekly_quota.unwrap().remaining_percent, 95);
+    }
+
+    #[test]
+    fn official_quota_older_than_five_minutes_is_hidden() {
+        let now_ms = 1_000_000;
+        let (_temp, state) = state_with_quota(WeeklyQuota {
+            used_percent: 5,
+            remaining_percent: 95,
+            resets_at_ms: now_ms + 60_000,
+            observed_at_ms: now_ms - 300_001,
+        });
+
+        let snapshot = super::snapshot_for_state_at(&state, now_ms).unwrap();
+
+        assert!(snapshot.weekly_quota.is_none());
+    }
+
+    #[test]
+    fn official_quota_at_its_reset_time_is_hidden() {
+        let now_ms = 1_000_000;
+        let (_temp, state) = state_with_quota(WeeklyQuota {
+            used_percent: 5,
+            remaining_percent: 95,
+            resets_at_ms: now_ms,
+            observed_at_ms: now_ms - 1_000,
+        });
+
+        let snapshot = super::snapshot_for_state_at(&state, now_ms).unwrap();
+
+        assert!(snapshot.weekly_quota.is_none());
+    }
+
+    #[test]
+    fn replacing_scanned_sessions_does_not_overwrite_official_quota() {
+        let now_ms = 1_000_000;
+        let (_temp, state) = state_with_quota(WeeklyQuota {
+            used_percent: 5,
+            remaining_percent: 95,
+            resets_at_ms: now_ms + 60_000,
+            observed_at_ms: now_ms - 1_000,
+        });
+
+        super::replace_cached_sessions(&state, vec![session(None)]);
+        let snapshot = super::snapshot_for_state_at(&state, now_ms).unwrap();
+
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.weekly_quota.unwrap().remaining_percent, 95);
     }
 }
