@@ -54,6 +54,9 @@ button { font: inherit; }
   cursor: pointer;
   transition: background 160ms ease-out, transform 160ms ease-out;
 }
+.top-bar .top-bar__update { width: auto; min-width: 40px; max-width: 86px; height: 24px; min-height: 24px; flex: 0 0 auto; overflow: hidden; padding: 0 7px; border-radius: 999px; font-size: 10px; font-variant-numeric: tabular-nums; font-weight: 700; line-height: 1; text-overflow: ellipsis; white-space: nowrap; }
+.top-bar .top-bar__update:disabled { cursor: default; opacity: 0.78; transform: none; }
+.top-bar .top-bar__update--failed { border-color: rgba(193, 49, 64, 0.28); color: #a82132; background: rgba(255, 221, 225, 0.62); }
 .top-bar button svg { width: 16px; height: 16px; stroke-width: 1.9; }
 .top-bar__theme-group button { width: 25px; height: 25px; min-height: 25px; border-color: transparent; border-radius: 6px; background: transparent; }
 .top-bar__theme-group button[aria-pressed="true"], .top-bar__theme-group button[aria-pressed="true"]:hover { color: #fff; background: #3478f6; box-shadow: 0 1px 4px rgba(38, 89, 185, 0.28); }
@@ -216,6 +219,13 @@ button { font: inherit; }
 .initialization-feed__event[data-phase="failed"] { color: #a82132; }
 
 @media (max-width: 360px) {
+  .top-bar--updating { gap: 6px; }
+  .top-bar--updating .top-bar__brand { gap: 5px; font-size: 14px; }
+  .top-bar--updating .top-bar__mark { display: none; }
+  .top-bar--updating .top-bar__controls { gap: 3px; }
+  .top-bar--updating .top-bar__theme-group { padding: 1px; }
+  .top-bar--updating .top-bar__theme-group button { width: 24px; height: 24px; min-height: 24px; }
+  .top-bar--updating .top-bar__locale > button, .top-bar--updating .top-bar__pin { width: 28px; }
   .monitoring-banner, .pulse-shell__error { padding: 7px 8px; }
   .session-card { padding: 10px; }
   .session-card__timers { gap: 5px; }
@@ -231,6 +241,7 @@ button { font: inherit; }
 :root[data-theme="dark"] { color: #f1f5fc; }
 :root[data-theme="dark"] .pulse-shell { background: color-mix(in srgb, #101828 64%, transparent); }
 :root[data-theme="dark"] .top-bar__count { color: #a9b4c8; }
+:root[data-theme="dark"] .top-bar .top-bar__update--failed { border-color: rgba(255, 132, 147, 0.34); color: #ff9eaa; background: rgba(103, 32, 45, 0.5); }
 :root[data-theme="dark"] .session-card__path { color: #8ac2ff; }
 :root[data-theme="dark"] .session-card__path:hover { color: #b9ddff; }
 :root[data-theme="dark"] .session-card__branch { color: #98a7bc; }

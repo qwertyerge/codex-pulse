@@ -1,14 +1,31 @@
 import { mount } from "@vue/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
 import TopBar from "../components/TopBar.vue";
+import type { UpdaterState } from "../composables/useUpdater";
 import { i18n } from "../i18n";
 
-function mountTopBar(props: { activeCount: number; alwaysOnTop: boolean; theme: "system" | "light" | "dark"; locale: "system" | "zh-CN" | "en" | "fr" | "de" }) {
-  return mount(TopBar, { props, global: { plugins: [i18n] } });
+interface TopBarTestProps {
+  activeCount: number;
+  alwaysOnTop: boolean;
+  theme: "system" | "light" | "dark";
+  locale: "system" | "zh-CN" | "en" | "fr" | "de";
+  updateState?: UpdaterState;
+}
+
+function mountTopBar(props: TopBarTestProps) {
+  return mount(TopBar, {
+    props: {
+      updateState: { phase: "idle" },
+      ...props
+    },
+    global: { plugins: [i18n] }
+  });
 }
 
 describe("TopBar", () => {
-  beforeEach(() => { i18n.global.locale.value = "en"; });
+  beforeEach(() => {
+    i18n.global.locale.value = "en";
+  });
 
   it("shows active count and emits a Pin to Top request", async () => {
     const wrapper = mountTopBar({ activeCount: 2, alwaysOnTop: false, theme: "system", locale: "en" });
@@ -43,5 +60,78 @@ describe("TopBar", () => {
 
     expect(wrapper.emitted("set-locale")?.[0]).toEqual(["fr"]);
     expect(wrapper.find('[role="menu"]').exists()).toBe(false);
+  });
+
+  it("keeps the active count when updater activity is not visible", () => {
+    const wrapper = mountTopBar({
+      activeCount: 3,
+      alwaysOnTop: false,
+      theme: "system",
+      locale: "en",
+      updateState: { phase: "checking" }
+    });
+
+    expect(wrapper.text()).toContain("3 active");
+    expect(wrapper.find(".top-bar__update").exists()).toBe(false);
+  });
+
+  it.each([
+    [
+      {
+        phase: "downloading",
+        version: "0.4.0",
+        downloaded: 42,
+        total: 100,
+        percent: 42
+      },
+      "Update 42%",
+      true
+    ],
+    [
+      {
+        phase: "downloading",
+        version: "0.4.0",
+        downloaded: 42
+      },
+      "Updating",
+      true
+    ],
+    [{ phase: "ready", version: "0.4.0" }, "Update", false],
+    [{ phase: "installing", version: "0.4.0" }, "Updating", true],
+    [{ phase: "failed", stage: "download" }, "Update failed", false]
+  ] as const)(
+    "renders updater state %o as %s",
+    (updateState, label, disabled) => {
+      const wrapper = mountTopBar({
+        activeCount: 3,
+        alwaysOnTop: false,
+        theme: "system",
+        locale: "en",
+        updateState
+      });
+      const badge = wrapper.get(".top-bar__update");
+
+      expect(wrapper.find(".top-bar__count").exists()).toBe(false);
+      expect(badge.text()).toBe(label);
+      expect(badge.attributes("aria-live")).toBe("polite");
+      expect(badge.attributes("disabled") !== undefined).toBe(disabled);
+    }
+  );
+
+  it("emits activation only from an enabled update badge", async () => {
+    const wrapper = mountTopBar({
+      activeCount: 1,
+      alwaysOnTop: false,
+      theme: "system",
+      locale: "en",
+      updateState: { phase: "ready", version: "0.4.0" }
+    });
+
+    const badge = wrapper.get(".top-bar__update");
+    expect(badge.attributes("title")).toBe("Install version 0.4.0");
+    expect(badge.attributes("aria-label")).toBe("Install version 0.4.0");
+    await badge.trigger("click");
+
+    expect(wrapper.emitted("activate-update")).toHaveLength(1);
   });
 });

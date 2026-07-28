@@ -12,7 +12,7 @@ Codex Pulse is a compact macOS and Windows desktop companion for watching active
 > Codex Pulse is an independent community project. It is not affiliated with or endorsed by OpenAI.
 
 > [!WARNING]
-> Published macOS artifacts are experimental. They are not Developer ID signed or Apple notarized, so normal Gatekeeper installation is not yet supported. The Windows NSIS installer is an unsigned experimental Draft Release artifact. Do not bypass SmartScreen or enterprise security policy. Build from source for the current supported path.
+> Published macOS artifacts are experimental. They are not Developer ID signed or Apple notarized, so normal Gatekeeper installation is not yet supported. The Windows NSIS artifact is a published unsigned experimental installer. Do not bypass SmartScreen, Gatekeeper, or enterprise security policy; build from source if those policies do not permit the artifacts.
 
 ## Highlights
 
@@ -26,11 +26,19 @@ Codex Pulse is a compact macOS and Windows desktop companion for watching active
 
 | Environment | Status |
 | --- | --- |
-| macOS ARM64 | Existing experimental DMG |
-| Windows 11 x64 native Codex | `0.3.0` MVP, unsigned experimental Draft Release NSIS |
+| macOS ARM64 | Published experimental `0.3.2` DMG |
+| Windows 11 x64 native Codex | Published experimental `0.3.2` NSIS, unsigned |
 | WSL, Windows ARM64, Windows 10 | Unsupported |
 
 Windows support requires the native Codex app and native Windows Codex data. WSL sessions and paths are not supported or translated. The MVP does not support native Mica or Acrylic; it preserves the existing CSS translucent surfaces. The native Windows installer artifact and interactive desktop UX proof remain `pending-user-eyeball`; the checked-in workflows alone are not evidence that GitHub Actions has verified Windows.
+
+## Automatic Updates and Privacy
+
+Version `0.3.2` does not contain the automatic updater. Once an updater-capable production build is installed, Codex Pulse checks GitHub Releases after startup and every six hours. When a newer release is available, it downloads the signed installer automatically, then asks before installing it and restarting Codex Pulse.
+
+Update requests do not send Codex transcripts, prompts, session data, quota data, or project paths. GitHub still receives ordinary request metadata under its terms and privacy policies. A failed update check is isolated from local session monitoring, which continues to operate normally.
+
+The first updater-capable release must be installed manually to establish this upgrade path. Updater signatures verify release integrity, but they do not replace Apple notarization or Windows Authenticode; Gatekeeper, SmartScreen, and enterprise policy continue to apply.
 
 ## Requirements
 

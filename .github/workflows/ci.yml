@@ -91,6 +91,6 @@ jobs:
       - name: Test Rust backend
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: Build NSIS package
-        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
+        run: pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --no-sign
       - name: Verify Windows package
         run: pwsh -NoProfile -File scripts/verify-windows-package.ps1 -BundleDirectory src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis

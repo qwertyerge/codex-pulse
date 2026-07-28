@@ -19,6 +19,8 @@ describe("narrow TopBar layout", () => {
     expect(rule(".top-bar__count")).toContain("overflow: hidden;");
     expect(rule(".top-bar__count")).toContain("text-overflow: ellipsis;");
     expect(rule(".top-bar__count")).toContain("white-space: nowrap;");
+    expect(rule(".top-bar .top-bar__update")).toContain("flex: 0 0 auto;");
+    expect(rule(".top-bar .top-bar__update")).toContain("white-space: nowrap;");
   });
 
   it("keeps the controls anchored across the 360 pixel breakpoint", () => {
@@ -30,9 +32,13 @@ describe("narrow TopBar layout", () => {
 
     expect(narrowMedia).not.toContain(".pulse-shell { padding:");
     expect(narrowMedia).not.toContain(".top-bar {");
-    expect(narrowMedia).not.toContain(".top-bar__brand {");
-    expect(narrowMedia).not.toContain(".top-bar__mark {");
-    expect(narrowMedia).not.toContain(".top-bar__controls { gap:");
+    expect(narrowMedia).not.toContain("\n  .top-bar__brand {");
     expect(narrowMedia).not.toContain(".top-bar button {");
+    expect(narrowMedia).toContain(".top-bar--updating .top-bar__mark");
+    expect(narrowMedia).toContain("display: none;");
+    expect(narrowMedia).toContain(".top-bar--updating { gap: 6px;");
+    expect(narrowMedia).toContain(
+      ".top-bar--updating .top-bar__controls { gap: 3px;"
+    );
   });
 });

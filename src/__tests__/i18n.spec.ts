@@ -1,7 +1,7 @@
 import { nextTick, ref } from "vue";
 import { describe, expect, it } from "vitest";
 
-import { i18n, resolveLocale } from "../i18n";
+import { i18n, messages, resolveLocale } from "../i18n";
 import { useLocale } from "../composables/useLocale";
 import type { LocaleMode } from "../types";
 
@@ -45,5 +45,28 @@ describe("localization runtime", () => {
     ];
     i18n.global.locale.value = "en";
     expect(actual).toEqual(expected);
+  });
+
+  it.each(["zh-CN", "fr", "de"] as const)(
+    "keeps updater keys complete and non-empty for %s",
+    (locale) => {
+      const englishKeys = Object.keys(messages.en.updater).sort();
+      const localized = messages[locale].updater;
+
+      expect(Object.keys(localized).sort()).toEqual(englishKeys);
+      expect(
+        Object.values(localized).every(
+          (value) => typeof value === "string" && value.trim().length > 0
+        )
+      ).toBe(true);
+    }
+  );
+
+  it("keeps the English updater keys non-empty", () => {
+    expect(
+      Object.values(messages.en.updater).every(
+        (value) => value.trim().length > 0
+      )
+    ).toBe(true);
   });
 });

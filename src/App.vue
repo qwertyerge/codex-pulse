@@ -13,11 +13,14 @@ import { useMonotonicClock } from "./composables/useMonotonicClock";
 import { useTheme } from "./composables/useTheme";
 import { useLocale } from "./composables/useLocale";
 import { useFooterInitialization } from "./composables/useFooterInitialization";
+import { useUpdater } from "./composables/useUpdater";
 import type { InitializationEvent } from "./types";
 
 const pulse = usePulse();
 const { t } = useI18n();
 const clock = useMonotonicClock();
+const updater = useUpdater();
+const updaterState = updater.state;
 let refresh: ReturnType<typeof setInterval> | undefined;
 let unlisten: UnlistenFn | undefined;
 let unlistenInitialization: UnlistenFn | undefined;
@@ -29,8 +32,18 @@ const {
   stop: stopFooterInitialization
 } = useFooterInitialization(computed(() => pulse.snapshot.value.initialization));
 
+async function activateUpdate() {
+  const version =
+    updaterState.value.phase === "ready" ? updaterState.value.version : "";
+  await updater.activate({
+    title: t("updater.confirmTitle"),
+    message: t("updater.confirmMessage", { version })
+  });
+}
+
 onMounted(async () => {
   await pulse.load();
+  updater.start();
   unlisten = await listen("sessions-changed", () => { void pulse.load(); });
   unlistenInitialization = await listen<InitializationEvent>("initialization-progress", (event) => {
     pulse.mergeInitializationEvent(event.payload);
@@ -41,6 +54,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  updater.stop();
   clock.stop();
   if (refresh) clearInterval(refresh);
   unlisten?.();
@@ -58,9 +72,11 @@ onUnmounted(() => {
       :always-on-top="pulse.snapshot.value.alwaysOnTop"
       :theme="pulse.snapshot.value.theme"
       :locale="pulse.snapshot.value.locale"
+      :update-state="updaterState"
       @toggle-pin="pulse.togglePin"
       @set-theme="pulse.setTheme"
       @set-locale="pulse.setLocale"
+      @activate-update="activateUpdate"
     />
     <MonitoringBanner
       :enabled="pulse.snapshot.value.monitoring.enabled"

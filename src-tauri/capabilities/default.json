@@ -3,5 +3,12 @@
   "identifier": "default",
   "description": "Main Codex Pulse window capability",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "updater:allow-check",
+    "updater:allow-download",
+    "updater:allow-install",
+    "dialog:allow-message",
+    "process:allow-restart"
+  ]
 }

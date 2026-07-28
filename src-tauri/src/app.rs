@@ -12,9 +12,18 @@ pub fn product_name() -> &'static str {
     "Codex Pulse"
 }
 
+#[doc(hidden)]
+pub fn register_updater_plugins<R: tauri::Runtime>(
+    builder: tauri::Builder<R>,
+) -> tauri::Builder<R> {
+    builder
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+}
+
 pub fn run() -> anyhow::Result<()> {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    register_updater_plugins(tauri::Builder::default().plugin(tauri_plugin_opener::init()))
         .plugin(tauri_plugin_liquid_glass::init())
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             crate::tray::show_main_window(app);

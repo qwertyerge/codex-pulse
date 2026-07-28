@@ -17,6 +17,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -32,6 +33,17 @@
       },
       "nsis": {
         "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFFMTQ3QTYzNkJCNkIxNkUKUldSdXNiWnJZM29Vcmt4L04vL0dOMzVnamZ5SU54R041MWwyNG41ZFZNN2ZQdHNobngxUGFEeXoK",
+      "endpoints": [
+        "https://github.com/qwertyerge/codex-pulse/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

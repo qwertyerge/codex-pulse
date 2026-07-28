@@ -107,6 +107,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: ${{ matrix.apple-signing-identity }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Codex Pulse __VERSION__"
@@ -114,5 +116,30 @@ jobs:
           generateReleaseNotes: true
           releaseDraft: true
           prerelease: false
-          uploadUpdaterJson: false
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          updaterJsonPreferNsis: true
           args: "--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}"
+
+  verify_updater_manifest:
+    name: Verify updater manifest
+    runs-on: ubuntu-latest
+    needs: release
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Download updater manifest
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/updater-manifest"
+          gh release download "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern latest.json \
+            --dir "$RUNNER_TEMP/updater-manifest" \
+            --clobber
+      - name: Validate updater manifest
+        run: node scripts/verify-updater-manifest.mjs "$RUNNER_TEMP/updater-manifest/latest.json" "$GITHUB_REF_NAME"
