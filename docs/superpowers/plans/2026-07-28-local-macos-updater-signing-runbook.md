@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Work only in `/Users/loki/.codex/worktrees/007c/codex-pulse`, which is an externally managed detached worktree.
+- Work only in the current externally managed detached `<worktree>`.
 - Do not create a branch, push, tag, Draft release, publication, or installer replacement.
 - Do not change `.github/workflows/release.yml`; it already supplies `APPLE_SIGNING_IDENTITY`.
 - Do not change `README.md`, `docs/README.zh-CN.md`, versions, or the historical acceptance report.
@@ -757,7 +757,7 @@ Expected: the commit contains exactly the four listed files.
 
 **Interfaces:**
 - Consumes: the existing encrypted key at
-  `/Users/loki/.tauri/codex-pulse-updater.key` and Keychain service/account
+  `$HOME/.tauri/codex-pulse-updater.key` and Keychain service/account
   defaults.
 - Produces: fresh non-secret signing, artifact, parity, automated-test, and Git
   evidence.

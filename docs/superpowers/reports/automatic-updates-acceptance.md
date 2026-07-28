@@ -31,9 +31,9 @@ The final `git diff --check` also exited `0`.
 - The generated public key bytes exactly match
   `plugins.updater.pubkey` in `src-tauri/tauri.conf.json`.
 - The encrypted private key exists at
-  `/Users/loki/.tauri/codex-pulse-updater.key` with mode `600`.
+  `$HOME/.tauri/codex-pulse-updater.key` with mode `600`.
 - The public key exists at
-  `/Users/loki/.tauri/codex-pulse-updater.key.pub` with mode `644`.
+  `$HOME/.tauri/codex-pulse-updater.key.pub` with mode `644`.
 - `git ls-files` contains no `codex-pulse-updater.key` path.
 - The desktop key-generation script wrote the passphrase to the login
   Keychain and compared a read-back value before reporting success.
@@ -45,9 +45,9 @@ The final `git diff --check` also exited `0`.
 
 Observed local updater artifacts:
 
-- `/Users/loki/.codex/worktrees/007c/codex-pulse/src-tauri/target/release/bundle/macos/Codex Pulse.app.tar.gz`
+- `src-tauri/target/release/bundle/macos/Codex Pulse.app.tar.gz`
   — 6,525,185 bytes.
-- `/Users/loki/.codex/worktrees/007c/codex-pulse/src-tauri/target/release/bundle/macos/Codex Pulse.app.tar.gz.sig`
+- `src-tauri/target/release/bundle/macos/Codex Pulse.app.tar.gz.sig`
   — 412 bytes.
 
 An independent filesystem check found exactly one `.app.tar.gz` and one

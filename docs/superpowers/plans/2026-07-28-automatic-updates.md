@@ -23,7 +23,8 @@
 - Keep the full `Codex Pulse` name at 320 pixels; the waveform mark may hide only in the narrow updating layout.
 - Localize visible text, title, and ARIA text in Simplified Chinese, English, French, and German.
 - Grant only `updater:allow-check`, `updater:allow-download`, `updater:allow-install`, `dialog:allow-message`, and `process:allow-restart` in addition to `core:default`.
-- Store the encrypted private key only at `/Users/loki/.tauri/codex-pulse-updater.key` with mode `0600`.
+- Store the encrypted private key only at
+  `$HOME/.tauri/codex-pulse-updater.key` with mode `0600`.
 - Store its random passphrase only in macOS Keychain service `Codex Pulse Updater Signing`, account `qwertyerge/codex-pulse`.
 - Configure GitHub Secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` without printing either value.
 - Keep `releaseDraft: true`, `max-parallel: 1`, and manual publication.
@@ -78,8 +79,8 @@
 - Modify: `src-tauri/src/app.rs`
 - Modify: `src-tauri/tauri.conf.json`
 - Modify: `src-tauri/capabilities/default.json`
-- External create: `/Users/loki/.tauri/codex-pulse-updater.key`
-- External create: `/Users/loki/.tauri/codex-pulse-updater.key.pub`
+- External create: `$HOME/.tauri/codex-pulse-updater.key`
+- External create: `$HOME/.tauri/codex-pulse-updater.key.pub`
 - External create: macOS Keychain generic-password item
 
 **Interfaces:**
@@ -200,8 +201,8 @@ Rust version floor or any existing dependency.
 First prove that neither the files nor the Keychain item already exist:
 
 ```bash
-test ! -e /Users/loki/.tauri/codex-pulse-updater.key
-test ! -e /Users/loki/.tauri/codex-pulse-updater.key.pub
+test ! -e "$HOME/.tauri/codex-pulse-updater.key"
+test ! -e "$HOME/.tauri/codex-pulse-updater.key.pub"
 ! security find-generic-password -a qwertyerge/codex-pulse -s "Codex Pulse Updater Signing" >/dev/null 2>&1
 ```
 
@@ -212,8 +213,8 @@ Run the following in one non-echoing shell. Do not enable `set -x`:
 
 ```bash
 set -euo pipefail
-UPDATER_KEY_DIR=/Users/loki/.tauri
-UPDATER_KEY_PATH=/Users/loki/.tauri/codex-pulse-updater.key
+UPDATER_KEY_DIR="$HOME/.tauri"
+UPDATER_KEY_PATH="$UPDATER_KEY_DIR/codex-pulse-updater.key"
 UPDATER_KEYCHAIN_SERVICE="Codex Pulse Updater Signing"
 UPDATER_KEYCHAIN_ACCOUNT=qwertyerge/codex-pulse
 umask 077
@@ -228,9 +229,9 @@ unset UPDATER_KEY_PASSWORD
 Verify metadata without printing either secret:
 
 ```bash
-test -s /Users/loki/.tauri/codex-pulse-updater.key
-test -s /Users/loki/.tauri/codex-pulse-updater.key.pub
-test "$(stat -f '%Lp' /Users/loki/.tauri/codex-pulse-updater.key)" = "600"
+test -s "$HOME/.tauri/codex-pulse-updater.key"
+test -s "$HOME/.tauri/codex-pulse-updater.key.pub"
+test "$(stat -f '%Lp' "$HOME/.tauri/codex-pulse-updater.key")" = "600"
 security find-generic-password -a qwertyerge/codex-pulse -s "Codex Pulse Updater Signing" >/dev/null
 ```
 
@@ -1937,7 +1938,7 @@ Run without `set -x`:
 
 ```bash
 set -euo pipefail
-UPDATER_KEY_PATH=/Users/loki/.tauri/codex-pulse-updater.key
+UPDATER_KEY_PATH="$HOME/.tauri/codex-pulse-updater.key"
 UPDATER_KEYCHAIN_SERVICE="Codex Pulse Updater Signing"
 UPDATER_KEYCHAIN_ACCOUNT=qwertyerge/codex-pulse
 test -s "$UPDATER_KEY_PATH"
@@ -2084,7 +2085,7 @@ Run:
 
 ```bash
 gh secret list --repo qwertyerge/codex-pulse --json name,updatedAt --jq '.[] | select(.name == "TAURI_SIGNING_PRIVATE_KEY" or .name == "TAURI_SIGNING_PRIVATE_KEY_PASSWORD")'
-test "$(stat -f '%Lp' /Users/loki/.tauri/codex-pulse-updater.key)" = "600"
+test "$(stat -f '%Lp' "$HOME/.tauri/codex-pulse-updater.key")" = "600"
 if git ls-files | rg -q 'codex-pulse-updater\.key'; then
   echo "private updater key is tracked" >&2
   exit 1

@@ -189,7 +189,7 @@ The dialog permission intentionally uses `dialog:allow-message`; Tauri's native
 Generate one signing-key pair dedicated to the Codex Pulse updater.
 
 - The encrypted private key is stored outside the repository at
-  `/Users/loki/.tauri/codex-pulse-updater.key` with mode `0600`.
+  `$HOME/.tauri/codex-pulse-updater.key` with mode `0600`.
 - A randomly generated high-entropy passphrase is stored in macOS Keychain
   under service `Codex Pulse Updater Signing` and account
   `qwertyerge/codex-pulse`.
