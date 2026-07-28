@@ -16,7 +16,8 @@ interface WorkflowStep {
 interface WorkflowJob {
   name: string;
   "runs-on": string;
-  needs?: string;
+  needs?: string | string[];
+  env?: Record<string, string>;
   strategy?: {
     "fail-fast": boolean;
     "max-parallel"?: number;
@@ -221,7 +222,11 @@ describe("GitHub workflows", () => {
       push: { tags: ["[0-9]*.[0-9]*.[0-9]*"] },
     });
     expect(workflow.permissions).toEqual({ contents: "write" });
-    expect(Object.keys(workflow.jobs)).toEqual(["guard", "release"]);
+    expect(Object.keys(workflow.jobs)).toEqual([
+      "guard",
+      "release",
+      "verify_updater_manifest",
+    ]);
 
     const guard = workflow.jobs.guard;
     expect(guard.name).toBe("Guard release source");
@@ -349,6 +354,10 @@ describe("GitHub workflows", () => {
     expect(build.env).toEqual({
       GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
       APPLE_SIGNING_IDENTITY: "${{ matrix.apple-signing-identity }}",
+      TAURI_SIGNING_PRIVATE_KEY:
+        "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
     });
     expect(build.with).toMatchObject({
       tagName: "${{ github.ref_name }}",
@@ -357,8 +366,44 @@ describe("GitHub workflows", () => {
       generateReleaseNotes: true,
       releaseDraft: true,
       prerelease: false,
-      uploadUpdaterJson: false,
+      uploadUpdaterJson: true,
+      uploadUpdaterSignatures: true,
+      updaterJsonPreferNsis: true,
       args: "--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}",
     });
+    expect(release.strategy?.["max-parallel"]).toBe(1);
+
+    const verification = workflow.jobs.verify_updater_manifest;
+    expect(verification.name).toBe("Verify updater manifest");
+    expect(verification["runs-on"]).toBe("ubuntu-latest");
+    expect(verification.needs).toBe("release");
+    expect(verification.env).toEqual({
+      GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
+    });
+    expect(stepUsing(verification, "actions/checkout@v7").with).toEqual({
+      "persist-credentials": false,
+    });
+
+    const download = stepNamed(verification, "Download updater manifest");
+    expect(download.shell).toBe("bash");
+    expect(download.run).toContain(
+      'mkdir -p "$RUNNER_TEMP/updater-manifest"',
+    );
+    expect(download.run).toContain(
+      'gh release download "$GITHUB_REF_NAME"',
+    );
+    expect(download.run).toContain("--pattern latest.json");
+    expect(download.run).toContain(
+      '--dir "$RUNNER_TEMP/updater-manifest"',
+    );
+    expect(download.run).toContain("--clobber");
+
+    const validateManifest = stepNamed(
+      verification,
+      "Validate updater manifest",
+    );
+    expect(validateManifest.run).toBe(
+      'node scripts/verify-updater-manifest.mjs "$RUNNER_TEMP/updater-manifest/latest.json" "$GITHUB_REF_NAME"',
+    );
   });
 });
