@@ -1997,30 +1997,22 @@ from these exact runs.
 
 - [ ] **Step 2: Build a signed macOS updater artifact without printing secrets**
 
-Run without `set -x`:
+Run the canonical maintainer-only build and verification entry point without
+shell tracing:
 
 ```bash
-set -euo pipefail
-UPDATER_KEY_PATH=/Users/loki/.tauri/codex-pulse-updater.key
-UPDATER_KEYCHAIN_SERVICE="Codex Pulse Updater Signing"
-UPDATER_KEYCHAIN_ACCOUNT=qwertyerge/codex-pulse
-test -s "$UPDATER_KEY_PATH"
-UPDATER_KEY_PASSWORD="$(security find-generic-password -w -a "$UPDATER_KEYCHAIN_ACCOUNT" -s "$UPDATER_KEYCHAIN_SERVICE")"
-TAURI_SIGNING_PRIVATE_KEY="$UPDATER_KEY_PATH" TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$UPDATER_KEY_PASSWORD" pnpm tauri build --bundles app
-unset UPDATER_KEY_PASSWORD
+scripts/build-local-updater-macos.sh
 ```
 
-Verify one archive and its adjacent signature:
+Expected: the command exits `0` only after the source app and the app extracted
+from `Codex Pulse.app.tar.gz` both pass
+`codesign --verify --deep --strict`, the adjacent `.sig` is non-empty, all
+repository and bundle versions match, the executable is ARM64, and the source
+and archived executable SHA-256 values are identical.
 
-```bash
-UPDATER_BUNDLE_DIR=src-tauri/target/release/bundle/macos
-test "$(find "$UPDATER_BUNDLE_DIR" -maxdepth 1 -type f -name '*.app.tar.gz' | wc -l | tr -d ' ')" = "1"
-test "$(find "$UPDATER_BUNDLE_DIR" -maxdepth 1 -type f -name '*.app.tar.gz.sig' | wc -l | tr -d ' ')" = "1"
-find "$UPDATER_BUNDLE_DIR" -maxdepth 1 -type f \( -name '*.app.tar.gz' -o -name '*.app.tar.gz.sig' \) -print
-```
-
-Expected: one `.app.tar.gz` and one `.app.tar.gz.sig`. This proves local
-artifact generation, not installation, restart, publication, or notarization.
+This proves local updater artifact generation, strict ad-hoc bundle validity,
+and archive parity. It does not prove Developer ID signing, notarization,
+installation, restart, publication, or cross-version updating.
 
 - [ ] **Step 3: Inspect the real 320-pixel TopBar layout**
 

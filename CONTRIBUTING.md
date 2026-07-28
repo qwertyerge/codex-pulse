@@ -46,6 +46,21 @@ pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis
 
 The pull-request workflow defines the `Frontend`, `Rust`, and `Rust (Windows)` checks. A checked-in workflow is not proof that a native Windows runner has passed; include the actual run URL and result when reporting Windows verification.
 
+### Maintainer-only macOS updater build
+
+Maintainers with the encrypted updater key and matching macOS Keychain item
+can build and verify the local updater bundle with:
+
+```bash
+scripts/build-local-updater-macos.sh
+```
+
+The script supplies the local ad-hoc signing identity before Tauri creates the
+updater archive, then strictly verifies both the source app and the app inside
+the archive. It also requires their executable hashes to match. This is local
+updater-integrity evidence only: the app remains ad-hoc signed and is not
+Developer ID signed or notarized.
+
 ## Pull Requests
 
 Explain the user-visible behavior, link related issues, and list the commands you ran. Include before-and-after screenshots for visual changes. A pull request must pass the `Frontend`, `Rust`, and `Rust (Windows)` workflow checks before it can merge.
