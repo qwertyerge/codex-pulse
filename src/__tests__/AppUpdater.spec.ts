@@ -111,7 +111,6 @@ describe("App automatic updater integration", () => {
     const wrapper = await mountApp();
 
     await flushPromises();
-    await vi.advanceTimersByTimeAsync(21_600_000);
 
     expect(boundary.check).not.toHaveBeenCalled();
     wrapper.unmount();

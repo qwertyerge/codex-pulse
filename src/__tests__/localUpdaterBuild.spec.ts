@@ -252,7 +252,10 @@ afterEach(() => {
   }
 });
 
-describe("local macOS updater signing runbook", () => {
+const describeOnPosix =
+  process.platform === "win32" ? describe.skip : describe;
+
+describeOnPosix("local macOS updater signing runbook", () => {
   it("prints help without requiring a toolchain", () => {
     const script = requireSourceScript();
     const result = runText("/bin/bash", [script, "--help"], {
