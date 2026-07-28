@@ -209,7 +209,7 @@ describe("GitHub workflows", () => {
       "pnpm test",
       "pnpm build",
       "cargo test --manifest-path src-tauri/Cargo.toml",
-      "pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis",
+      "pnpm tauri build --target x86_64-pc-windows-msvc --bundles nsis --no-sign",
       "pwsh -NoProfile -File scripts/verify-windows-package.ps1 -BundleDirectory src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis",
     ]);
   });
@@ -371,6 +371,7 @@ describe("GitHub workflows", () => {
       updaterJsonPreferNsis: true,
       args: "--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}",
     });
+    expect(build.with?.args).not.toContain("--no-sign");
     expect(release.strategy?.["max-parallel"]).toBe(1);
 
     const verification = workflow.jobs.verify_updater_manifest;
