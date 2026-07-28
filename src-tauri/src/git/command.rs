@@ -10,6 +10,9 @@ use std::{
 #[cfg(test)]
 use std::sync::mpsc::SyncSender;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 #[derive(Debug)]
 pub enum GitCommandError {
     Spawn(std::io::Error),
@@ -99,6 +102,16 @@ fn collect_pipe(
         .map_err(GitCommandError::Wait)
 }
 
+fn configure_process(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
 fn terminate_and_reap(mut child: Child, reap_timeout: Duration) -> Option<Child> {
     let _ = child.kill();
     let deadline = Instant::now() + reap_timeout;
@@ -151,16 +164,17 @@ fn spawn_background_reaper(
 
 impl GitRunner for ProcessGitRunner {
     fn run(&self, cwd: &Path, args: &[OsString]) -> Result<GitCommandOutput, GitCommandError> {
-        let mut child = Command::new(&self.executable)
+        let mut command = Command::new(&self.executable);
+        command
             .current_dir(cwd)
             .args(args)
             .env("GIT_OPTIONAL_LOCKS", "0")
             .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(GitCommandError::Spawn)?;
+            .stderr(Stdio::piped());
+        configure_process(&mut command);
+        let mut child = command.spawn().map_err(GitCommandError::Spawn)?;
 
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
@@ -262,6 +276,12 @@ mod tests {
 
     fn fixture_runner(timeout: Duration) -> ProcessGitRunner {
         ProcessGitRunner::new(process_fixture().to_path_buf(), timeout)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_creation_flags_hide_console() {
+        assert_eq!(super::CREATE_NO_WINDOW, 0x0800_0000);
     }
 
     #[test]
