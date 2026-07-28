@@ -67,22 +67,35 @@ export function useUpdater(runtime: UpdaterRuntime = productionRuntime) {
   let candidate: UpdateCandidate | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   let started = false;
-  let inFlight = false;
+  let lifecycleGeneration = 0;
+  let operationToken: symbol | undefined;
+
+  async function closeUpdate(update: UpdateCandidate | undefined) {
+    if (!update) return;
+    try {
+      await update.close();
+    } catch {
+      // Closing a stale resource must not replace the current state.
+    }
+  }
 
   async function closeCandidate() {
     const stale = candidate;
     candidate = undefined;
-    if (!stale) return;
-    try {
-      await stale.close();
-    } catch {
-      // Closing a stale resource must not replace the original state.
-    }
+    await closeUpdate(stale);
+  }
+
+  function ownsOperation(generation: number, token: symbol) {
+    return (
+      started &&
+      lifecycleGeneration === generation &&
+      operationToken === token
+    );
   }
 
   function blocksCheck() {
     return (
-      inFlight ||
+      operationToken !== undefined ||
       state.value.phase === "downloading" ||
       state.value.phase === "ready" ||
       state.value.phase === "installing"
@@ -90,13 +103,19 @@ export function useUpdater(runtime: UpdaterRuntime = productionRuntime) {
   }
 
   async function checkForUpdate() {
-    if (!runtime.enabled || blocksCheck()) return;
-    inFlight = true;
+    if (!started || !runtime.enabled || blocksCheck()) return;
+    const generation = lifecycleGeneration;
+    const token = Symbol();
+    operationToken = token;
     let stage: UpdaterFailureStage = "check";
     state.value = { phase: "checking" };
 
     try {
       const update = await runtime.check();
+      if (!ownsOperation(generation, token)) {
+        await closeUpdate(update ?? undefined);
+        return;
+      }
       if (!update) {
         state.value = { phase: "idle" };
         return;
@@ -113,6 +132,8 @@ export function useUpdater(runtime: UpdaterRuntime = productionRuntime) {
       };
 
       await update.download((event) => {
+        if (!ownsOperation(generation, token)) return;
+
         if (event.event === "Started") {
           downloaded = 0;
           total =
@@ -140,12 +161,15 @@ export function useUpdater(runtime: UpdaterRuntime = productionRuntime) {
         }
       });
 
+      if (!ownsOperation(generation, token)) return;
       state.value = { phase: "ready", version: update.version };
     } catch {
+      if (!ownsOperation(generation, token)) return;
       await closeCandidate();
+      if (!ownsOperation(generation, token)) return;
       state.value = { phase: "failed", stage };
     } finally {
-      inFlight = false;
+      if (operationToken === token) operationToken = undefined;
     }
   }
 
@@ -154,11 +178,20 @@ export function useUpdater(runtime: UpdaterRuntime = productionRuntime) {
       await checkForUpdate();
       return;
     }
-    if (state.value.phase !== "ready" || !candidate || inFlight) return;
+    if (
+      !started ||
+      state.value.phase !== "ready" ||
+      !candidate ||
+      operationToken !== undefined
+    ) {
+      return;
+    }
 
     const update = candidate;
     const version = state.value.version;
-    inFlight = true;
+    const generation = lifecycleGeneration;
+    const token = Symbol();
+    operationToken = token;
     let stage: UpdaterFailureStage = "confirm";
 
     try {
@@ -166,26 +199,31 @@ export function useUpdater(runtime: UpdaterRuntime = productionRuntime) {
         title: copy.title,
         kind: "info"
       });
-      if (!accepted) return;
+      if (!ownsOperation(generation, token) || !accepted) return;
 
       stage = "install";
       state.value = { phase: "installing", version };
       await update.install();
+      if (!ownsOperation(generation, token)) return;
 
       stage = "relaunch";
       await closeCandidate();
+      if (!ownsOperation(generation, token)) return;
       await runtime.relaunch();
     } catch {
+      if (!ownsOperation(generation, token)) return;
       await closeCandidate();
+      if (!ownsOperation(generation, token)) return;
       state.value = { phase: "failed", stage };
     } finally {
-      inFlight = false;
+      if (operationToken === token) operationToken = undefined;
     }
   }
 
   function start() {
     if (started || !runtime.enabled) return;
     started = true;
+    lifecycleGeneration += 1;
     void checkForUpdate();
     timer = setInterval(() => {
       void checkForUpdate();
@@ -194,8 +232,11 @@ export function useUpdater(runtime: UpdaterRuntime = productionRuntime) {
 
   function stop() {
     started = false;
+    lifecycleGeneration += 1;
     if (timer) clearInterval(timer);
     timer = undefined;
+    operationToken = undefined;
+    state.value = { phase: "idle" };
     void closeCandidate();
   }
 

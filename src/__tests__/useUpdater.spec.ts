@@ -102,6 +102,134 @@ describe("useUpdater", () => {
     expect(check).toHaveBeenCalledTimes(2);
   });
 
+  it("stays idle and closes a late candidate when stopped during a check", async () => {
+    const checkGate = deferred<UpdateCandidate | null>();
+    const update = makeCandidate();
+    const check = vi
+      .fn<UpdaterRuntime["check"]>()
+      .mockReturnValue(checkGate.promise);
+    const updater = useUpdater(makeRuntime({ check }));
+
+    updater.start();
+    await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+    updater.stop();
+
+    expect(updater.state.value).toEqual({ phase: "idle" });
+    checkGate.resolve(update.candidate);
+    await vi.waitFor(() =>
+      expect(update.candidate.close).toHaveBeenCalledTimes(1)
+    );
+
+    expect(update.candidate.download).not.toHaveBeenCalled();
+    expect(updater.state.value).toEqual({ phase: "idle" });
+  });
+
+  it("ignores download progress and completion after stop", async () => {
+    const downloadGate = deferred<void>();
+    const update = makeCandidate("0.4.0", downloadGate);
+    const updater = useUpdater(
+      makeRuntime({ check: vi.fn().mockResolvedValue(update.candidate) })
+    );
+
+    updater.start();
+    await vi.waitFor(() =>
+      expect(updater.state.value.phase).toBe("downloading")
+    );
+    updater.stop();
+
+    expect(updater.state.value).toEqual({ phase: "idle" });
+    update.emit({ event: "Started", data: { contentLength: 200 } });
+    update.emit({ event: "Progress", data: { chunkLength: 84 } });
+    expect(updater.state.value).toEqual({ phase: "idle" });
+
+    downloadGate.resolve();
+    await downloadGate.promise;
+    await Promise.resolve();
+    expect(update.candidate.close).toHaveBeenCalledTimes(1);
+    expect(updater.state.value).toEqual({ phase: "idle" });
+  });
+
+  it("does not install when confirmation resolves after stop", async () => {
+    const confirmationGate = deferred<boolean>();
+    const update = makeCandidate();
+    const runtime = makeRuntime({
+      check: vi.fn().mockResolvedValue(update.candidate),
+      confirm: vi.fn().mockReturnValue(confirmationGate.promise)
+    });
+    const updater = useUpdater(runtime);
+
+    updater.start();
+    await vi.waitFor(() => expect(updater.state.value.phase).toBe("ready"));
+    const activation = updater.activate(confirmation);
+    await vi.waitFor(() => expect(runtime.confirm).toHaveBeenCalledTimes(1));
+    updater.stop();
+
+    expect(updater.state.value).toEqual({ phase: "idle" });
+    confirmationGate.resolve(true);
+    await activation;
+
+    expect(update.candidate.install).not.toHaveBeenCalled();
+    expect(runtime.relaunch).not.toHaveBeenCalled();
+    expect(updater.state.value).toEqual({ phase: "idle" });
+  });
+
+  it("keeps idle and suppresses relaunch when stopped during install", async () => {
+    const installGate = deferred<void>();
+    const update = makeCandidate();
+    vi.mocked(update.candidate.install).mockReturnValue(installGate.promise);
+    const runtime = makeRuntime({
+      check: vi.fn().mockResolvedValue(update.candidate)
+    });
+    const updater = useUpdater(runtime);
+
+    updater.start();
+    await vi.waitFor(() => expect(updater.state.value.phase).toBe("ready"));
+    const activation = updater.activate(confirmation);
+    await vi.waitFor(() =>
+      expect(update.candidate.install).toHaveBeenCalledTimes(1)
+    );
+    updater.stop();
+
+    expect(updater.state.value).toEqual({ phase: "idle" });
+    installGate.resolve();
+    await activation;
+
+    expect(runtime.relaunch).not.toHaveBeenCalled();
+    expect(updater.state.value).toEqual({ phase: "idle" });
+  });
+
+  it("starts a fresh lifecycle while an old check is still pending", async () => {
+    const firstCheck = deferred<UpdateCandidate | null>();
+    const secondCheck = deferred<UpdateCandidate | null>();
+    const stale = makeCandidate("0.4.0");
+    const check = vi
+      .fn<UpdaterRuntime["check"]>()
+      .mockReturnValueOnce(firstCheck.promise)
+      .mockReturnValueOnce(secondCheck.promise)
+      .mockResolvedValue(null);
+    const updater = useUpdater(makeRuntime({ check }));
+
+    updater.start();
+    await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+    updater.stop();
+    updater.start();
+    await vi.waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+
+    firstCheck.resolve(stale.candidate);
+    await vi.waitFor(() =>
+      expect(stale.candidate.close).toHaveBeenCalledTimes(1)
+    );
+    expect(stale.candidate.download).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_INTERVAL_MS);
+    expect(check).toHaveBeenCalledTimes(2);
+
+    secondCheck.resolve(null);
+    await vi.waitFor(() =>
+      expect(updater.state.value).toEqual({ phase: "idle" })
+    );
+  });
+
   it("does nothing when the runtime gate is disabled", async () => {
     const check = vi.fn<UpdaterRuntime["check"]>().mockResolvedValue(null);
     const updater = useUpdater(makeRuntime({ enabled: false, check }));
