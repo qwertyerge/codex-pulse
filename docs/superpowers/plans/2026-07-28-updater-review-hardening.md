@@ -18,6 +18,7 @@
 - An installer call that began before `stop()` may finish, but its stale continuation must not mutate state, close a newer candidate, or relaunch.
 - Use lifecycle generation plus operation-token ownership; do not add `AbortController` or a permanently disposed flag.
 - Production `run()` and the Rust regression must register dialog, process, and updater plugins through the same generic helper.
+- Keep the native IPC regression enabled on Windows; give Cargo's Windows test harness its own embedded Common Controls v6 manifest instead of platform-gating the test.
 - Preserve the original `cfc0e9d` / 122-test acceptance table; append follow-up evidence instead of rewriting history.
 - Do not rename `src/__tests__/localUpdaterBuild.spec.ts` or mechanically reformat `src/__tests__/updaterManifest.spec.ts`.
 - Do not change updater endpoints, signing configuration, signing secrets, UI copy, release publication policy, or Windows install mode.
@@ -36,7 +37,9 @@
 | `src/__tests__/AppUpdater.spec.ts` | Prove the production Vue/Tauri integration forwards no unsupported install options. |
 | `docs/superpowers/plans/2026-07-28-automatic-updates.md` | Keep the earlier executable snippets aligned with the corrected contract and lifecycle. |
 | `src-tauri/Cargo.toml` | Enable the existing Tauri crate's test-only MockRuntime API for Rust test targets. |
-| `src-tauri/src/app.rs` | Share native updater-related plugin registration and probe it through MockRuntime IPC. |
+| `src-tauri/build.rs` | Embed the Common Controls v6 manifest required by dialog-plugin imports into Windows test targets. |
+| `src-tauri/src/app.rs` | Share native updater-related plugin registration and expose the hidden integration-test entry point. |
+| `src-tauri/tests/updater_plugin_registration.rs` | Probe production plugin registration through MockRuntime IPC on every CI platform. |
 | `docs/superpowers/plans/2026-07-28-updater-review-hardening.md` | Record the approved test-feature correction discovered during the Task 3 RED run. |
 | `docs/superpowers/reports/automatic-updates-acceptance.md` | Preserve historical evidence and append fresh review-hardening verification. |
 | PR #17 inline review threads | Record the disposition of all eight comments in their original threads. |
@@ -609,20 +612,21 @@ Expected: the commit contains only the three listed files and all five new regre
 **Files:**
 
 - Modify: `src-tauri/Cargo.toml:40-42`
-- Modify: `src-tauri/src/app.rs:1-50,123-173`
+- Modify: `src-tauri/src/app.rs:1-50`
+- Create: `src-tauri/tests/updater_plugin_registration.rs`
 - Modify: `docs/superpowers/plans/2026-07-28-updater-review-hardening.md:12-45,606-740`
 
 **Interfaces:**
 
 - Consumes: `tauri::Builder<R>` for any `R: tauri::Runtime`.
 - Consumes: the existing Tauri 2 dependency with its empty `test` feature enabled only for dev/test targets.
-- Produces: private `register_updater_plugins<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R>`.
+- Produces: `#[doc(hidden)] pub register_updater_plugins<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R>` for production and the external integration-test crate.
 - Registers exactly: dialog, process, and updater plugins in their existing order.
 - Probes: `plugin:dialog|message`, `plugin:process|exit`, and `plugin:updater|download`.
 
-- [ ] **Step 1: Add a failing MockRuntime IPC registration test**
+- [ ] **Step 1: Add a failing MockRuntime IPC registration integration test**
 
-Extend the `tests` module imports in `src-tauri/src/app.rs` and add:
+Create `src-tauri/tests/updater_plugin_registration.rs` and add:
 
 ```rust
 use tauri::{
@@ -633,9 +637,7 @@ use tauri::{
     LogicalUnit, PixelUnit, WebviewWindowBuilder,
 };
 
-use super::{
-    main_window_platform_policy, main_window_size_constraints, register_updater_plugins,
-};
+use codex_pulse::app::register_updater_plugins;
 
 #[test]
 fn production_builder_registers_updater_plugin_commands() {
@@ -714,7 +716,7 @@ returns command-not-found.
 Run:
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml app::tests::production_builder_registers_updater_plugin_commands -- --exact
+cargo test --manifest-path src-tauri/Cargo.toml --test updater_plugin_registration production_builder_registers_updater_plugin_commands -- --exact
 ```
 
 Expected on the first run: compilation reports that `tauri::test` is gated
@@ -734,7 +736,7 @@ tauri = { version = "2", features = ["test"] }
 Run:
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml app::tests::production_builder_registers_updater_plugin_commands -- --exact
+cargo test --manifest-path src-tauri/Cargo.toml --test updater_plugin_registration production_builder_registers_updater_plugin_commands -- --exact
 ```
 
 Expected: the `tauri::test` gate error is gone and compilation now fails only
@@ -743,10 +745,12 @@ dependency's version/features remain unchanged, and Cargo adds no new crate.
 
 - [ ] **Step 4: Extract the generic production registration helper**
 
-Add above `run()`:
+Add above `run()`; the hidden public visibility is required because Cargo
+compiles `tests/` as a separate crate:
 
 ```rust
-fn register_updater_plugins<R: tauri::Runtime>(
+#[doc(hidden)]
+pub fn register_updater_plugins<R: tauri::Runtime>(
     builder: tauri::Builder<R>,
 ) -> tauri::Builder<R> {
     builder
@@ -777,7 +781,7 @@ Run:
 
 ```bash
 cargo fmt --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml app::tests::production_builder_registers_updater_plugin_commands -- --exact
+cargo test --manifest-path src-tauri/Cargo.toml --test updater_plugin_registration production_builder_registers_updater_plugin_commands -- --exact
 pnpm test
 pnpm build
 cargo fmt --check --manifest-path src-tauri/Cargo.toml
@@ -789,7 +793,7 @@ Expected:
 
 - the focused IPC regression passes on all three commands;
 - frontend remains 25 files / 135 tests;
-- Rust reports 82 unit tests, with auxiliary and doc-test targets also passing;
+- Rust reports 81 library unit tests plus the updater registration integration test, with the existing auxiliary and doc-test targets also passing;
 - every command exits `0`.
 
 - [ ] **Step 6: Review and commit the native regression**
@@ -797,8 +801,8 @@ Expected:
 Run:
 
 ```bash
-git diff -- src-tauri/Cargo.toml src-tauri/src/app.rs docs/superpowers/plans/2026-07-28-updater-review-hardening.md
-git add src-tauri/Cargo.toml src-tauri/src/app.rs docs/superpowers/plans/2026-07-28-updater-review-hardening.md
+git diff -- src-tauri/Cargo.toml src-tauri/src/app.rs src-tauri/tests/updater_plugin_registration.rs docs/superpowers/plans/2026-07-28-updater-review-hardening.md
+git add src-tauri/Cargo.toml src-tauri/src/app.rs src-tauri/tests/updater_plugin_registration.rs docs/superpowers/plans/2026-07-28-updater-review-hardening.md
 git diff --cached --check
 git commit -m "test: cover native updater plugin registration"
 git rev-parse HEAD
@@ -957,6 +961,116 @@ gh run view "$UPDATER_REVIEW_RUN_ID" --json headSha,status,conclusion,url,jobs
 ```
 
 Expected: conclusion `success`; `Frontend`, `Rust`, and `Rust (Windows)` all complete successfully. Confirm the Windows job includes frontend tests/build, Rust tests, NSIS build with `--no-sign`, and package verification. Report CodeRabbit separately; a rate-limited CodeRabbit review is not a GitHub Actions failure.
+
+---
+
+### Task 5A: Give the Windows Rust test harness its required Common Controls manifest
+
+**Files:**
+
+- Modify: `src-tauri/build.rs`
+- Modify: `src-tauri/src/app.rs`
+- Create: `src-tauri/tests/updater_plugin_registration.rs`
+- Modify: `docs/superpowers/plans/2026-07-28-updater-review-hardening.md`
+- Modify after green CI: `docs/superpowers/reports/automatic-updates-acceptance.md`
+
+**Interfaces:**
+
+- Consumes: Cargo's `cargo:rustc-link-arg-tests` build-script directive.
+- Produces on Windows integration-test targets only: an embedded `RT_MANIFEST` selecting `Microsoft.Windows.Common-Controls` version `6.0.0.0`.
+- Preserves: the Windows execution of `production_builder_registers_updater_plugin_commands`, the production binary's Tauri-generated resource, and all non-Windows linker behavior.
+
+- [ ] **Step 1: Preserve the Windows loader failure and identify its exact import boundary**
+
+The first pushed run, `30347196303` at `fcc968f1bf95485ca6a0bdbbb1c36b5919eb5e6b`, compiled the Windows test executable but failed to launch it with `0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`.
+
+Cross-compile the current library test harness without running it and inspect the PE:
+
+```bash
+cargo xwin test --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-msvc --no-run
+llvm-readobj --coff-imports <codex_pulse-test.exe>
+llvm-readobj --coff-resources <codex_pulse-test.exe>
+```
+
+Expected RED evidence:
+
+- imports contain `comctl32.dll!TaskDialogIndirect`;
+- resources are empty;
+- Microsoft documents `TaskDialogIndirect` as a Common Controls v6 export and documents that applications without a selecting manifest use v5 by default.
+
+- [ ] **Step 2: Move the IPC probe to an integration target and add the narrow linker contract**
+
+Move `production_builder_registers_updater_plugin_commands` from the
+`src-tauri/src/app.rs` unit-test module into
+`src-tauri/tests/updater_plugin_registration.rs`. Mark the shared production
+helper `#[doc(hidden)] pub` so the separate integration-test crate can use the
+same registration path.
+
+After `tauri_build::build()` in `src-tauri/build.rs`, check `CARGO_CFG_TARGET_OS` and emit:
+
+```rust
+if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+    println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
+    println!(
+        "cargo:rustc-link-arg-tests=/MANIFESTDEPENDENCY:type='win32' \
+         name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
+         processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+    );
+}
+```
+
+Do not add a crate, alter Tauri's production manifest, or skip the IPC regression on Windows.
+
+- [ ] **Step 3: Prove the resulting test PE contains a valid manifest**
+
+Repeat the Windows MSVC cross-compile. Inspect both the explicit
+`updater_plugin_registration` integration-test executable and the library
+unit-test executable.
+
+Expected GREEN evidence:
+
+- the integration-test executable's resource type `MANIFEST` / ID `1` contains an `assemblyIdentity` for `Microsoft.Windows.Common-Controls` version `6.0.0.0`;
+- the library unit-test executable no longer imports `TaskDialogIndirect`, so it does not require that manifest;
+- the production binary retains only Tauri's existing resource and does not receive a duplicate manifest.
+
+- [ ] **Step 4: Run local verification and commit the repair**
+
+Run:
+
+```bash
+pnpm test
+pnpm build
+cargo fmt --check --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml
+git diff --check
+```
+
+Expected: frontend remains 25 files / 135 tests; Rust remains 82 tests in
+total (81 library unit tests plus one updater registration integration test);
+all commands exit `0`.
+
+Commit the build-script and plan correction together:
+
+```bash
+git add src-tauri/build.rs src-tauri/src/app.rs src-tauri/tests/updater_plugin_registration.rs docs/superpowers/plans/2026-07-28-updater-review-hardening.md
+git diff --cached --check
+git commit -m "fix: manifest Windows updater plugin tests"
+```
+
+- [ ] **Step 5: Fast-forward the existing PR branch and require a new green run**
+
+Repeat Task 5's ancestry proof and normal detached-HEAD push. Wait for the new run whose `headSha` exactly equals the repair commit. Require all three jobs, including Windows Rust tests, NSIS build, and package verification, to pass.
+
+- [ ] **Step 6: Append the CI correction to the acceptance report**
+
+Add a separate dated row or paragraph beneath the existing PR review follow-up evidence. Preserve the earlier local results and explicitly record:
+
+- failed run `30347196303` and its loader boundary;
+- the final manifest-fix commit and matching successful run;
+- the PE manifest inspection;
+- that no signed updater/release/manual installed-app flow was exercised.
+
+Commit this as evidence-only documentation and push it normally. If that documentation-only push triggers another CI run, require that newest SHA to pass before replying to review threads.
 
 ---
 
