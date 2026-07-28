@@ -36,7 +36,7 @@ export interface UpdateCandidate {
   download(
     onEvent?: (event: UpdaterDownloadEvent) => void
   ): Promise<void>;
-  install(options?: { restartAfterInstall?: boolean }): Promise<void>;
+  install(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -170,7 +170,7 @@ export function useUpdater(runtime: UpdaterRuntime = productionRuntime) {
 
       stage = "install";
       state.value = { phase: "installing", version };
-      await update.install({ restartAfterInstall: true });
+      await update.install();
 
       stage = "relaunch";
       await closeCandidate();

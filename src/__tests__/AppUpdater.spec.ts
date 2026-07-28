@@ -138,9 +138,7 @@ describe("App automatic updater integration", () => {
       "Version 0.4.0 is ready. Install it and restart Codex Pulse?",
       { title: "Install Codex Pulse update", kind: "info" }
     );
-    expect(update.install).toHaveBeenCalledWith({
-      restartAfterInstall: true
-    });
+    expect(update.install.mock.calls).toEqual([[]]);
     expect(boundary.relaunch).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });

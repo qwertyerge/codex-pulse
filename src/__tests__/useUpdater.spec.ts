@@ -239,7 +239,7 @@ describe("useUpdater", () => {
     });
   });
 
-  it("installs with Windows restart enabled and relaunches when install returns", async () => {
+  it("installs with the plugin's zero-argument contract and relaunches when install returns", async () => {
     const update = makeCandidate();
     const runtime = makeRuntime({
       check: vi.fn().mockResolvedValue(update.candidate)
@@ -250,9 +250,7 @@ describe("useUpdater", () => {
     await vi.waitFor(() => expect(updater.state.value.phase).toBe("ready"));
     await updater.activate(confirmation);
 
-    expect(update.candidate.install).toHaveBeenCalledWith({
-      restartAfterInstall: true
-    });
+    expect(vi.mocked(update.candidate.install).mock.calls).toEqual([[]]);
     expect(update.candidate.close).toHaveBeenCalledTimes(1);
     expect(runtime.relaunch).toHaveBeenCalledTimes(1);
     expect(updater.state.value).toEqual({

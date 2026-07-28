@@ -568,7 +568,7 @@ it("keeps a verified update ready when confirmation is cancelled", async () => {
   expect(updater.state.value).toEqual({ phase: "ready", version: "0.4.0" });
 });
 
-it("installs with Windows restart enabled and relaunches when install returns", async () => {
+it("installs with the plugin's zero-argument contract and relaunches when install returns", async () => {
   const update = makeCandidate();
   const runtime = makeRuntime({
     check: vi.fn().mockResolvedValue(update.candidate)
@@ -579,9 +579,7 @@ it("installs with Windows restart enabled and relaunches when install returns", 
   await vi.waitFor(() => expect(updater.state.value.phase).toBe("ready"));
   await updater.activate(confirmation);
 
-  expect(update.candidate.install).toHaveBeenCalledWith({
-    restartAfterInstall: true
-  });
+  expect(vi.mocked(update.candidate.install).mock.calls).toEqual([[]]);
   expect(update.candidate.close).toHaveBeenCalledTimes(1);
   expect(runtime.relaunch).toHaveBeenCalledTimes(1);
   expect(updater.state.value).toEqual({
@@ -730,7 +728,7 @@ export interface UpdateCandidate {
   download(
     onEvent?: (event: UpdaterDownloadEvent) => void
   ): Promise<void>;
-  install(options?: { restartAfterInstall?: boolean }): Promise<void>;
+  install(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -861,7 +859,7 @@ export function useUpdater(runtime: UpdaterRuntime = productionRuntime) {
 
       stage = "install";
       state.value = { phase: "installing", version };
-      await update.install({ restartAfterInstall: true });
+      await update.install();
 
       stage = "relaunch";
       await closeCandidate();
@@ -898,6 +896,10 @@ export function useUpdater(runtime: UpdaterRuntime = productionRuntime) {
   };
 }
 ```
+
+Windows installer presentation is configured by
+`plugins.updater.windows.installMode` in `tauri.conf.json`, not by an
+`install()` argument.
 
 - [ ] **Step 5: Run the focused suite and verify GREEN**
 
@@ -1450,9 +1452,7 @@ describe("App automatic updater integration", () => {
       "Version 0.4.0 is ready. Install it and restart Codex Pulse?",
       { title: "Install Codex Pulse update", kind: "info" }
     );
-    expect(update.install).toHaveBeenCalledWith({
-      restartAfterInstall: true
-    });
+    expect(update.install.mock.calls).toEqual([[]]);
     expect(boundary.relaunch).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });
