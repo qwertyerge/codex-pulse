@@ -1,5 +1,5 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicU8, Ordering},
     Mutex, RwLock,
 };
 use std::{
@@ -38,7 +38,7 @@ pub struct AppState {
     quota_refresh: Mutex<Option<QuotaRefreshHandle>>,
     initialization: Mutex<InitializationFeed>,
     recent_event_display: Mutex<HashMap<String, DisplayedRecentEvent>>,
-    refresh_in_flight: AtomicBool,
+    refresh_gate: RefreshGate,
 }
 
 #[derive(Default)]
@@ -50,6 +50,92 @@ struct CachedSnapshot {
 const RECENT_EVENT_COALESCE_MS: i64 = 5_000;
 const OFFICIAL_QUOTA_MAX_AGE_MS: i64 = 5 * 60 * 1_000;
 pub const FALLBACK_RECONCILIATION_SECONDS: u64 = 60;
+const REFRESH_IDLE: u8 = 0;
+const REFRESH_RUNNING: u8 = 1;
+const REFRESH_RUNNING_PENDING: u8 = 2;
+
+#[derive(Default)]
+struct RefreshGate(AtomicU8);
+
+impl RefreshGate {
+    fn request(&self) -> bool {
+        loop {
+            match self.0.load(Ordering::Acquire) {
+                REFRESH_IDLE => {
+                    if self
+                        .0
+                        .compare_exchange(
+                            REFRESH_IDLE,
+                            REFRESH_RUNNING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return true;
+                    }
+                }
+                REFRESH_RUNNING => {
+                    if self
+                        .0
+                        .compare_exchange(
+                            REFRESH_RUNNING,
+                            REFRESH_RUNNING_PENDING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return false;
+                    }
+                }
+                REFRESH_RUNNING_PENDING => return false,
+                _ => unreachable!("refresh gate contains an invalid state"),
+            }
+        }
+    }
+
+    fn complete(&self) -> bool {
+        loop {
+            match self.0.load(Ordering::Acquire) {
+                REFRESH_RUNNING => {
+                    if self
+                        .0
+                        .compare_exchange(
+                            REFRESH_RUNNING,
+                            REFRESH_IDLE,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return false;
+                    }
+                }
+                REFRESH_RUNNING_PENDING => {
+                    if self
+                        .0
+                        .compare_exchange(
+                            REFRESH_RUNNING_PENDING,
+                            REFRESH_RUNNING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return true;
+                    }
+                }
+                REFRESH_IDLE => return false,
+                _ => unreachable!("refresh gate contains an invalid state"),
+            }
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        self.0.load(Ordering::Acquire) != REFRESH_IDLE
+    }
+}
 
 #[derive(Debug, Clone)]
 struct DisplayedRecentEvent {
@@ -80,7 +166,7 @@ impl AppState {
             quota_refresh: Mutex::new(None),
             initialization: Mutex::new(InitializationFeed::default()),
             recent_event_display: Mutex::new(HashMap::new()),
-            refresh_in_flight: AtomicBool::new(false),
+            refresh_gate: RefreshGate::default(),
         }
     }
 
@@ -293,7 +379,7 @@ fn snapshot_for_state_at(state: &AppState, now_ms: i64) -> Result<AppSnapshot, S
     let mut snapshot = AppSnapshot {
         sessions,
         weekly_quota,
-        is_loading: state.refresh_in_flight.load(Ordering::Acquire),
+        is_loading: state.refresh_gate.is_running(),
         initialization: state.cached_initialization(),
         monitoring: MonitoringView {
             enabled: false,
@@ -325,9 +411,14 @@ fn snapshot_for_state_at(state: &AppState, now_ms: i64) -> Result<AppSnapshot, S
 pub fn schedule_refresh(app: tauri::AppHandle) {
     let state = app.state::<AppState>();
     state.request_quota_refresh();
-    if state.refresh_in_flight.swap(true, Ordering::AcqRel) {
+    if !state.refresh_gate.request() {
         return;
     }
+    start_refresh(app);
+}
+
+fn start_refresh(app: tauri::AppHandle) {
+    let state = app.state::<AppState>();
     begin_initialization(&app, &state, Utc::now().timestamp_millis());
     publish_initialization_event(
         &app,
@@ -403,8 +494,12 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
                 format!("Reconciliation failed: {error}"),
             ),
         }
-        state.refresh_in_flight.store(false, Ordering::Release);
+        let run_again = state.refresh_gate.complete();
         let _ = app.emit(crate::hook::SESSIONS_CHANGED_EVENT, ());
+        drop(state);
+        if run_again {
+            start_refresh(app);
+        }
     });
 }
 
@@ -530,7 +625,7 @@ mod tests {
 
     use super::{
         coalesce_recent_events, set_always_on_top_config, set_locale_config, validate_external_url,
-        validate_project_path, AppState, FALLBACK_RECONCILIATION_SECONDS,
+        validate_project_path, AppState, RefreshGate, FALLBACK_RECONCILIATION_SECONDS,
     };
     use crate::config::ConfigStore;
     use crate::model::{
@@ -548,6 +643,29 @@ mod tests {
             recent_event: event,
             last_user_message: None,
         }
+    }
+
+    #[test]
+    fn refresh_gate_queues_one_trailing_refresh() {
+        let gate = RefreshGate::default();
+
+        assert!(gate.request());
+        assert!(gate.is_running());
+        assert!(!gate.request());
+        assert!(!gate.request());
+        assert!(gate.complete());
+        assert!(gate.is_running());
+        assert!(!gate.complete());
+        assert!(!gate.is_running());
+    }
+
+    #[test]
+    fn refresh_gate_can_start_again_after_completion() {
+        let gate = RefreshGate::default();
+
+        assert!(gate.request());
+        assert!(!gate.complete());
+        assert!(gate.request());
     }
 
     #[test]
