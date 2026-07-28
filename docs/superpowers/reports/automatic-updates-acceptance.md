@@ -52,6 +52,46 @@ Native old-version-to-new-version installation and restart, Windows
 interaction, publication, and post-publication update checks remain
 unverified.
 
+### Windows test-manifest CI correction
+
+The first post-review GitHub Actions run, `30347196303`, at
+`fcc968f1bf95485ca6a0bdbbb1c36b5919eb5e6b` compiled the Windows Rust test
+executable but failed before running its tests with
+`0xc0000139 / STATUS_ENTRYPOINT_NOT_FOUND`. PE inspection isolated the loader
+boundary: the library unit-test harness imported
+`comctl32.dll!TaskDialogIndirect` without an embedded Common Controls v6
+manifest.
+
+The repair commit
+`ab2da6519437314a553414c25c469647214986ba` moved the production plugin IPC
+probe to an explicit integration-test target and applied the Windows-only
+test linker manifest to that target. Cross-compiled PE inspection then showed:
+
+- the `updater_plugin_registration` test executable has one manifest resource
+  selecting `Microsoft.Windows.Common-Controls` version `6.0.0.0`;
+- the library unit-test executable no longer imports `TaskDialogIndirect` and
+  has no added manifest resource;
+- the production binary retains its single Tauri-generated manifest and does
+  not receive a duplicate resource.
+
+Fresh local verification at the repair commit passed: 25 frontend files / 135
+tests, the production frontend build, formatting, 81 Rust library unit tests
+plus one updater integration test, all auxiliary and doc-test targets, and
+`git diff --check`.
+
+Matching GitHub Actions run
+[`30349012574`](https://github.com/qwertyerge/codex-pulse/actions/runs/30349012574)
+completed with conclusion `success`. Its `headSha` exactly matched the repair
+commit. `Frontend` passed in 31 seconds, `Rust` passed in 56 seconds, and
+`Rust (Windows)` passed in 6 minutes 4 seconds. The Windows job independently
+passed frontend tests/build, Rust tests (including the integration target),
+the unsigned NSIS package build, and Windows package verification.
+
+This correction did not change signing secrets or updater signing
+configuration. No signed updater, Draft release, publication, installed-app
+replacement, interactive install/restart, or old-version-to-new-version flow
+was exercised.
+
 ## Signed Tauri Boundary
 
 - The generated public key bytes exactly match
