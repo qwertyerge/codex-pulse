@@ -1,5 +1,5 @@
 use std::sync::{
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicI64, AtomicU8, Ordering},
     Mutex, RwLock,
 };
 use std::{
@@ -38,6 +38,7 @@ pub struct AppState {
     quota_refresh: Mutex<Option<QuotaRefreshHandle>>,
     initialization: Mutex<InitializationFeed>,
     recent_event_display: Mutex<HashMap<String, DisplayedRecentEvent>>,
+    recent_event_wakeup: DeadlineWakeup,
     refresh_gate: RefreshGate,
 }
 
@@ -137,6 +138,37 @@ impl RefreshGate {
     }
 }
 
+#[derive(Default)]
+struct DeadlineWakeup(AtomicI64);
+
+impl DeadlineWakeup {
+    fn arm_earliest(&self, deadline_ms: i64) -> bool {
+        loop {
+            let current = self.0.load(Ordering::Acquire);
+            if current != 0 && current <= deadline_ms {
+                return false;
+            }
+            if self
+                .0
+                .compare_exchange(current, deadline_ms, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    fn claim(&self, deadline_ms: i64) -> bool {
+        self.0
+            .compare_exchange(deadline_ms, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    fn clear(&self) {
+        self.0.store(0, Ordering::Release);
+    }
+}
+
 #[derive(Debug, Clone)]
 struct DisplayedRecentEvent {
     event: RecentEvent,
@@ -166,6 +198,7 @@ impl AppState {
             quota_refresh: Mutex::new(None),
             initialization: Mutex::new(InitializationFeed::default()),
             recent_event_display: Mutex::new(HashMap::new()),
+            recent_event_wakeup: DeadlineWakeup::default(),
             refresh_gate: RefreshGate::default(),
         }
     }
@@ -260,7 +293,8 @@ fn coalesce_recent_events(
     sessions: &mut [SessionSnapshot],
     display: &mut HashMap<String, DisplayedRecentEvent>,
     observed_at_ms: i64,
-) {
+) -> Option<i64> {
+    let mut earliest_deadline_ms = None;
     let visible_ids = sessions
         .iter()
         .map(|session| session.thread_id.clone())
@@ -284,15 +318,48 @@ fn coalesce_recent_events(
             continue;
         };
 
-        if candidate.occurred_at_ms > current.event.occurred_at_ms
-            && observed_at_ms - current.displayed_at_ms >= RECENT_EVENT_COALESCE_MS
-        {
-            current.event = candidate;
-            current.displayed_at_ms = observed_at_ms;
+        if candidate.occurred_at_ms > current.event.occurred_at_ms {
+            let deadline_ms = current.displayed_at_ms + RECENT_EVENT_COALESCE_MS;
+            if observed_at_ms >= deadline_ms {
+                current.event = candidate;
+                current.displayed_at_ms = observed_at_ms;
+                continue;
+            }
+            earliest_deadline_ms = Some(
+                earliest_deadline_ms.map_or(deadline_ms, |earliest: i64| earliest.min(deadline_ms)),
+            );
+            session.recent_event = Some(current.event.clone());
         } else {
             session.recent_event = Some(current.event.clone());
         }
     }
+    earliest_deadline_ms
+}
+
+fn schedule_recent_event_wakeup(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    deadline_ms: Option<i64>,
+) {
+    let Some(deadline_ms) = deadline_ms else {
+        state.recent_event_wakeup.clear();
+        return;
+    };
+    if !state.recent_event_wakeup.arm_earliest(deadline_ms) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let delay_ms = deadline_ms
+            .saturating_sub(Utc::now().timestamp_millis())
+            .max(0) as u64;
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        let state = app.state::<AppState>();
+        if state.recent_event_wakeup.claim(deadline_ms) {
+            drop(state);
+            schedule_refresh(app);
+        }
+    });
 }
 
 fn replace_cached_sessions(state: &AppState, sessions: Vec<SessionSnapshot>) {
@@ -463,14 +530,18 @@ fn start_refresh(app: tauri::AppHandle) {
         let state = app.state::<AppState>();
         match result {
             Ok(Ok(mut scan)) => {
-                if let Ok(mut display) = state.recent_event_display.lock() {
-                    coalesce_recent_events(
-                        &mut scan.sessions,
-                        &mut display,
-                        Utc::now().timestamp_millis(),
-                    );
-                }
+                let recent_event_deadline_ms =
+                    if let Ok(mut display) = state.recent_event_display.lock() {
+                        coalesce_recent_events(
+                            &mut scan.sessions,
+                            &mut display,
+                            Utc::now().timestamp_millis(),
+                        )
+                    } else {
+                        None
+                    };
                 replace_cached_sessions(&state, scan.sessions);
+                schedule_recent_event_wakeup(&app, &state, recent_event_deadline_ms);
                 publish_initialization_event(
                     &app,
                     &state,
@@ -625,7 +696,8 @@ mod tests {
 
     use super::{
         coalesce_recent_events, set_always_on_top_config, set_locale_config, validate_external_url,
-        validate_project_path, AppState, RefreshGate, FALLBACK_RECONCILIATION_SECONDS,
+        validate_project_path, AppState, DeadlineWakeup, RefreshGate,
+        FALLBACK_RECONCILIATION_SECONDS,
     };
     use crate::config::ConfigStore;
     use crate::model::{
@@ -684,15 +756,46 @@ mod tests {
         };
         let mut display = HashMap::new();
         let mut initial = vec![session(Some(first.clone()))];
-        coalesce_recent_events(&mut initial, &mut display, 10_000);
+        assert_eq!(
+            coalesce_recent_events(&mut initial, &mut display, 10_000),
+            None
+        );
 
         let mut within_window = vec![session(Some(second.clone()))];
-        coalesce_recent_events(&mut within_window, &mut display, 14_999);
+        assert_eq!(
+            coalesce_recent_events(&mut within_window, &mut display, 14_999),
+            Some(15_000)
+        );
         assert_eq!(within_window[0].recent_event, Some(first));
 
         let mut after_window = vec![session(Some(second.clone()))];
-        coalesce_recent_events(&mut after_window, &mut display, 15_000);
+        assert_eq!(
+            coalesce_recent_events(&mut after_window, &mut display, 15_000),
+            None
+        );
         assert_eq!(after_window[0].recent_event, Some(second));
+    }
+
+    #[test]
+    fn deadline_wakeup_keeps_the_earliest_effective_timer() {
+        let wakeup = DeadlineWakeup::default();
+
+        assert!(wakeup.arm_earliest(15_000));
+        assert!(!wakeup.arm_earliest(16_000));
+        assert!(wakeup.arm_earliest(14_000));
+        assert!(!wakeup.claim(15_000));
+        assert!(wakeup.claim(14_000));
+        assert!(!wakeup.claim(14_000));
+    }
+
+    #[test]
+    fn deadline_wakeup_can_cancel_a_timer() {
+        let wakeup = DeadlineWakeup::default();
+
+        assert!(wakeup.arm_earliest(15_000));
+        wakeup.clear();
+        assert!(!wakeup.claim(15_000));
+        assert!(wakeup.arm_earliest(20_000));
     }
 
     #[test]
