@@ -167,6 +167,13 @@ hostname, path, or storage identifier.
 `fixture.txt.sig` is the public Tauri updater signature produced by the
 restored private key. Publishing it is equivalent to publishing updater
 artifact signatures and does not disclose the private key or passphrase.
+Before promotion, the script requires the outer file to be canonical,
+single-line base64 with no surrounding whitespace, then decodes it and
+requires its untrusted comment to be the expected Tauri signing header and its
+trusted comment to contain only a numeric timestamp plus `file:fixture.txt`.
+It also requires exactly two base64 signature-body lines and no additional
+non-empty metadata. This prevents an absolute path or other unexpected value
+from being hidden inside the outer base64 document.
 
 `verification.json` uses a stable schema and records only:
 
@@ -224,11 +231,12 @@ It explicitly removes conflicting signing-key environment variables before
 launching the signer and unsets the secret-bearing variables immediately
 afterward.
 
-This design minimizes exposure but does not claim memory zeroization. During
-the signing call, the shell and Tauri CLI necessarily hold the secret path or
-passphrase in process memory or environment. A compromised process with
-sufficient access under the same user account is outside this drill's threat
-model.
+This design minimizes exposure but does not claim memory zeroization. The
+shell briefly holds the restored path, encrypted key text, and passphrase in
+memory while it creates the private copy. During the signing call, the shell
+and Tauri CLI necessarily hold the temporary key path or passphrase in process
+memory or environment. A compromised process with sufficient access under the
+same user account is outside this drill's threat model.
 
 Raw signer stdout and stderr stay in the permission-restricted temporary
 directory and are never promoted to evidence. Failure output identifies only
@@ -256,6 +264,8 @@ After secrets are requested, any of these conditions fails closed:
 - encrypted-key format validation fails;
 - signing fails;
 - expected `.sig` output is absent;
+- decoded `.sig` metadata contains an unexpected header, filename, path, or
+  extra non-empty line;
 - verification against the committed public key fails;
 - the tampered fixture is incorrectly accepted;
 - an evidence hash cannot be computed; or
@@ -284,6 +294,8 @@ pseudo-terminal boundary where required. It covers:
 - raw signer output is not copied into evidence;
 - secret canaries do not appear in stdout, stderr, fixture, signature,
   verification JSON, or repository paths;
+- outer and decoded signature documents contain only the exact approved
+  comments and base64 signature bodies;
 - signing failure, verification failure, and unexpected negative-check
   success produce no evidence;
 - an existing evidence directory is never overwritten; and
@@ -308,8 +320,10 @@ After the maintainer completes the interactive drill:
    committed configuration;
 2. mutate a temporary fixture copy and prove verification fails;
 3. validate every declared SHA-256 value;
-4. scan evidence for prohibited user-specific and secret-bearing fields; and
-5. confirm the readiness report references the exact evidence source commit.
+4. decode the public signature and validate its exact path-free comment
+   schema;
+5. scan evidence for prohibited user-specific and secret-bearing fields; and
+6. confirm the readiness report references the exact evidence source commit.
 
 ### Full repository verification
 
@@ -363,6 +377,7 @@ The recovery gate is `verified` only when:
   exact public key committed in `src-tauri/tauri.conf.json`;
 - the same verifier rejects a modified fixture;
 - public evidence contains no prohibited secret or location data;
+- decoded signature comments contain no path or unexpected metadata;
 - an independent replay from repository contents succeeds;
 - focused and full local verification pass;
 - the evidence and readiness update are committed and pushed to pull request
