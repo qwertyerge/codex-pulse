@@ -209,6 +209,17 @@ function createHarness(options: HarnessOptions = {}): Harness {
       '  cd "$(dirname "${BASH_SOURCE[0]}")"',
       "  pwd -P",
       ')"',
+      'child_environment_contains_response="false"',
+      "for environment_name in $(compgen -e); do",
+      '  environment_value="${!environment_name}"',
+      '  case "$environment_value" in',
+      "    *passphrase-canary*|*/restored.key)",
+      '      child_environment_contains_response="true"',
+      "      ;;",
+      "  esac",
+      "done",
+      "printf 'child_environment_contains_response=%s\\n' \\",
+      '  "$child_environment_contains_response"',
       'original_tty_state="$(stty -g < /dev/tty)"',
       '/bin/bash "$driver_directory/scripts/verify-updater-signing-backup.sh"',
       'recovery_status="$?"',
@@ -296,7 +307,9 @@ function createHarness(options: HarnessOptions = {}): Harness {
     fakeBin,
     "cp",
     [
-      'test "${1:-}" != "$FAKE_RESTORED_KEY_PATH"',
+      'case "${1:-}" in',
+      "  */restored.key) exit 45 ;;",
+      "esac",
       '/bin/cp "$@"',
     ].join("\n"),
   );
@@ -335,8 +348,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
       'test -z "${TAURI_PRIVATE_KEY_PATH:-}"',
       'test -z "${TAURI_PRIVATE_KEY_PASSWORD:-}"',
       'test -z "${TAURI_KEY_PASSWORD:-}"',
-      'test "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" = "$FAKE_PASSWORD"',
-      'test "$TAURI_SIGNING_PRIVATE_KEY_PATH" != "$FAKE_RESTORED_KEY_PATH"',
+      `test "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" = ${JSON.stringify(passwordCanary)}`,
+      'case "$TAURI_SIGNING_PRIVATE_KEY_PATH" in',
+      "  */restored.key) exit 46 ;;",
+      "esac",
       'node -e \'const fs=require("fs"); const mode=fs.statSync(process.argv[1]).mode & 0o777; if (mode !== 0o600) process.exit(42)\' "$TAURI_SIGNING_PRIVATE_KEY_PATH"',
       'node -e \'const fs=require("fs"); const bytes=fs.readFileSync(process.argv[1]); if (bytes.at(-1) === 10 || bytes.at(-1) === 13) process.exit(44)\' "$TAURI_SIGNING_PRIVATE_KEY_PATH"',
       'printf "%s\\n" "$*" > "$FAKE_AUDIT_DIRECTORY/signer-argv"',
@@ -424,12 +439,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
     TMPDIR: `${privateTempDirectory}/`,
     FAKE_AUDIT_DIRECTORY: auditDirectory,
     FAKE_INVALID_PUBLIC_SIGNATURE: invalidPublicSignature,
-    FAKE_PASSWORD: passwordCanary,
     FAKE_PUBLIC_SIGNATURE: fakePublicSignature,
     FAKE_READ_SIGNAL: options.signalDuringHiddenRead ?? "",
     FAKE_SIGNATURE_METADATA_INVALID:
       options.signatureMetadataInvalid ? "1" : "0",
-    FAKE_RESTORED_KEY_PATH: restoredKeyPath,
     FAKE_SIGNER_FAILS: options.signerFails ? "1" : "0",
     FAKE_TAMPERED_ACCEPTED: options.tamperedAccepted ? "1" : "0",
     FAKE_VERIFIER_FAILS: options.verifierFails ? "1" : "0",
@@ -479,6 +492,12 @@ function expectNoSecrets(result: TextResult, harness: Harness) {
   );
   expect(`${result.stdout}\n${result.stderr}`).not.toContain(
     "tty_state_restored=false",
+  );
+  expect(`${result.stdout}\n${result.stderr}`).toContain(
+    "child_environment_contains_response=false",
+  );
+  expect(`${result.stdout}\n${result.stderr}`).not.toContain(
+    "child_environment_contains_response=true",
   );
 }
 
