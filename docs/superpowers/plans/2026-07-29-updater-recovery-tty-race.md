@@ -365,7 +365,7 @@ Update focused test counts only from fresh command output.
 Run:
 
 ```bash
-git diff --exit-code ca6f551867dab8b4ec34eca7df8a1c958d6a3e0c -- \
+git diff --exit-code ed4aea500e8999f179216d775036878fbc89530a -- \
   docs/superpowers/reports/0.4.0-updater-backup-recovery
 shasum -a 256 \
   docs/superpowers/reports/0.4.0-updater-backup-recovery/fixture.txt \
@@ -373,8 +373,10 @@ shasum -a 256 \
   docs/superpowers/reports/0.4.0-updater-backup-recovery/verification.json
 ```
 
-Expected: the Git diff is empty and the hashes equal the values already
-recorded in `verification.json` and the readiness report.
+Expected: the Git diff against the evidence-introducing commit is empty and
+the hashes equal the values already recorded in `verification.json` and the
+readiness report. Keep the distinct fixture `source_commit`
+`ca6f551867dab8b4ec34eca7df8a1c958d6a3e0c` unchanged.
 
 - [ ] **Step 4: Commit the report correction**
 
