@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "verified_at_utc": "2026-07-29T14:48:31Z",
+  "source_commit": "ca6f551867dab8b4ec34eca7df8a1c958d6a3e0c",
+  "tauri_cli_version": "tauri-cli 2.11.4",
+  "updater_plugin_version": "2.10.1",
+  "minisign_verify_version": "0.2.5",
+  "fixture_sha256": "40cba9a72dabb33b3a376f863deaaefba72f25963bc51cb79fd8816a3935b5ec",
+  "signature_sha256": "125c8e079c491811b57157950b34418c7737dcec3eb37dcb22a5994e72a826ed",
+  "public_key_config_sha256": "f914cff2593981637258bdfa0c35e64f8f7837d65dd4035b7393e4378a47db99",
+  "encrypted_key_format_valid": true,
+  "independent_key_source_attested": true,
+  "separate_passphrase_source_attested": true,
+  "signature_verified": true,
+  "tampered_fixture_rejected": true
+}
