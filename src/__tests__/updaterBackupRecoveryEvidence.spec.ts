@@ -36,12 +36,19 @@ function sha256(contents: Buffer | string) {
 
 describe("updater signing backup recovery evidence", () => {
   it("contains only the approved schema and public facts", () => {
+    const attributes = readFileSync(
+      resolve(repositoryRoot, ".gitattributes"),
+      "utf8",
+    ).split(/\r?\n/);
     const fixture = read("fixture.txt").toString("utf8");
     const signature = read("fixture.txt.sig").toString("utf8");
     const evidence = JSON.parse(
       read("verification.json").toString("utf8"),
     ) as RecoveryEvidence;
 
+    expect(attributes).toContain(
+      "docs/superpowers/reports/0.4.0-updater-backup-recovery/* text eol=lf",
+    );
     expect(Object.keys(evidence).sort()).toEqual([
       "encrypted_key_format_valid",
       "fixture_sha256",
