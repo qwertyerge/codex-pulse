@@ -213,10 +213,18 @@ not offer a real-secret debug mode.
 
 The restored-key path and passphrase are read silently from `/dev/tty`. The
 path is never passed in command-line arguments. The passphrase is never passed
-with `--password`, printed, persisted, or written to shell history. The Bash
-`read` builtin owns both silent-mode activation and prompt emission in one
-call, so fast input cannot land between a separately printed prompt and echo
-suppression.
+with `--password`, printed, persisted, or written to shell history. Before
+either hidden prompt can be emitted, the script saves the exact terminal state
+with `stty -g` and disables echo with `stty -echo`. It retains Bash `read -s`
+as defense in depth, restores the exact saved state immediately after each
+read, and clears the saved state after restoration.
+
+This explicit ordering is required for the supported Apple Bash 3.2. In
+[Apple's `bash-142` source](https://github.com/apple-oss-distributions/bash/blob/bash-142/bash-3.2/builtins/read.def#L307-L378),
+`read -s -p` prints and flushes its prompt before it calls `ttnoecho()`,
+leaving a window in which a fast responder can submit visible input. The script
+therefore does not rely on the builtin to make prompt emission and echo
+suppression atomic.
 
 The restored encrypted key is copied to a `mktemp` directory with directory
 mode `0700` and file mode `0600`. The script validates that the copy uses the
@@ -249,8 +257,11 @@ directory and are never promoted to evidence. Failure output identifies only
 the stable failed stage, because upstream error messages may include the
 restored-key path.
 
-An exit trap unsets secret-bearing shell variables and deletes the exact
-temporary directory created by this run.
+An exit trap first restores any saved terminal state, then unsets
+secret-bearing shell variables and deletes the exact temporary directory
+created by this run. This restoration path covers read failure and any
+catchable termination that reaches `EXIT`; an uncatchable process or host
+failure remains outside the script's guarantees.
 
 ## Preconditions and Fail-Closed Behavior
 
@@ -260,7 +271,7 @@ The script fails before requesting secrets unless:
 - `/dev/tty` is available;
 - the worktree is clean;
 - the expected `0.4.0` configuration and public key are present;
-- required local tools are available;
+- required local tools, including `stty`, are available;
 - the public evidence destination does not already exist; and
 - the two source-separation attestations are accepted.
 
@@ -308,8 +319,11 @@ pseudo-terminal boundary where required. It covers:
 - raw signer output is not copied into evidence;
 - secret canaries do not appear in stdout, stderr, fixture, signature,
   verification JSON, or repository paths;
-- hidden input remains absent from pseudo-terminal output even when `read`
-  setup is deliberately delayed after the harness observes a prompt;
+- hidden input remains absent from pseudo-terminal output when a Bash wrapper
+  reproduces Apple Bash 3.2's prompt-before-`ttnoecho()` ordering and delays
+  entry into the builtin after the harness observes the prompt;
+- the original terminal state is restored after hidden input succeeds or
+  fails;
 - outer and decoded signature documents contain only the exact approved
   comments and base64 signature bodies;
 - signing failure, verification failure, and unexpected negative-check
