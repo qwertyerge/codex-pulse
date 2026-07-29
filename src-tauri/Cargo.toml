@@ -40,5 +40,7 @@ uuid = "1"
 url = "2"
 
 [dev-dependencies]
+base64 = "=0.22.1"
+minisign-verify = "=0.2.5"
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"
