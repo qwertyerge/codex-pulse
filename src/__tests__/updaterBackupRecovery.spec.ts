@@ -313,6 +313,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
       'test "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" = "$FAKE_PASSWORD"',
       'test "$TAURI_SIGNING_PRIVATE_KEY_PATH" != "$FAKE_RESTORED_KEY_PATH"',
       'node -e \'const fs=require("fs"); const mode=fs.statSync(process.argv[1]).mode & 0o777; if (mode !== 0o600) process.exit(42)\' "$TAURI_SIGNING_PRIVATE_KEY_PATH"',
+      'node -e \'const fs=require("fs"); const bytes=fs.readFileSync(process.argv[1]); if (bytes.at(-1) === 10 || bytes.at(-1) === 13) process.exit(44)\' "$TAURI_SIGNING_PRIVATE_KEY_PATH"',
       'printf "%s\\n" "$*" > "$FAKE_AUDIT_DIRECTORY/signer-argv"',
       'printf "raw-path=%s raw-password=%s\\n" "$TAURI_SIGNING_PRIVATE_KEY_PATH" "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"',
       'if [[ "${FAKE_SIGNER_FAILS:-0}" = "1" ]]; then exit 43; fi',

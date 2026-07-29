@@ -986,7 +986,7 @@ if IFS= read -r extra_key_line <&3 || [[ -n "$extra_key_line" ]]; then
   fail "encrypted-key-format"
 fi
 exec 3<&-
-printf '%s\n' "$restored_key_encoded" > "$private_key_copy"
+printf '%s' "$restored_key_encoded" > "$private_key_copy"
 chmod 600 "$private_key_copy"
 unset restored_key_path
 unset restored_key_encoded
@@ -1194,7 +1194,9 @@ The original key transfer intentionally uses Bash file-descriptor, `read`, and
 process: doing so would expose the restored backup path or encrypted key
 content through argv or a pipe. The shell-memory exposure is already disclosed
 in the approved design and the variables are unset immediately after the
-private copy is created.
+private copy is created. The no-newline `printf '%s'` form is required: an
+empirical recovery drill confirmed that Tauri rejects the same canonical
+encrypted key bytes when the private copy gains a trailing newline.
 
 The two `rm -rf` calls are allowed only for directories created by this
 invocation and guarded by exact prefixes. Do not broaden either pattern.

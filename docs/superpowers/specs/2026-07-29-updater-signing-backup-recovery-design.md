@@ -218,6 +218,9 @@ with `--password`, printed, persisted, or written to shell history.
 The restored encrypted key is copied to a `mktemp` directory with directory
 mode `0700` and file mode `0600`. The script validates that the copy uses the
 encrypted Tauri/rsign secret-key format without printing decoded key material.
+The copy preserves the canonical outer-base64 bytes without adding a trailing
+newline, because the Tauri signer rejects an otherwise identical encrypted key
+file when that newline is present.
 
 The Tauri CLI has no password-from-stdin interface. Therefore, for the single
 signing subprocess only, the script supplies:

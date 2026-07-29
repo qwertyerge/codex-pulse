@@ -180,7 +180,7 @@ if IFS= read -r extra_key_line <&3 || [[ -n "$extra_key_line" ]]; then
   fail "encrypted-key-format"
 fi
 exec 3<&-
-printf '%s\n' "$restored_key_encoded" > "$private_key_copy"
+printf '%s' "$restored_key_encoded" > "$private_key_copy"
 chmod 600 "$private_key_copy"
 unset restored_key_path
 unset restored_key_encoded
