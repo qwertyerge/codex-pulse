@@ -148,8 +148,7 @@ trap cleanup EXIT
 read_hidden() {
   local prompt="$1"
   local destination="$2"
-  printf '%s ' "$prompt" > /dev/tty
-  IFS= read -r -s "$destination" < /dev/tty
+  IFS= read -r -s -p "$prompt " "$destination" < /dev/tty
   printf '\n' > /dev/tty
 }
 

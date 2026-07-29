@@ -954,8 +954,7 @@ trap cleanup EXIT
 read_hidden() {
   local prompt="$1"
   local destination="$2"
-  printf '%s ' "$prompt" > /dev/tty
-  IFS= read -r -s "$destination" < /dev/tty
+  IFS= read -r -s -p "$prompt " "$destination" < /dev/tty
   printf '\n' > /dev/tty
 }
 
@@ -1888,15 +1887,18 @@ gh api \
 
 If CodeRabbit reports an actionable finding, use
 `superpowers:receiving-code-review`, verify the finding against source, and
-resolve it before claiming success. A finding that changes
-`scripts/verify-updater-signing-backup.sh`,
-`src-tauri/examples/verify_updater_signature.rs`, either exact verifier
-dependency, or evidence semantics invalidates the immutable drill binding.
-Stop through AskHuman before editing, obtain an explicit evidence-retention
-decision, and return to Task 3 plus a new real recovery drill. Never silently
-overwrite or reuse the old public evidence. A documentation-only correction
-that does not affect those boundaries may proceed with fresh local and remote
-verification.
+resolve it before claiming success. A finding that changes the signing
+identity or public key, encrypted-key parsing or copied bytes, signer
+invocation or secret environment, signature verifier or either exact verifier
+dependency, fixture semantics, or evidence schema/content semantics
+invalidates the immutable drill binding. Stop through AskHuman before editing,
+obtain an explicit evidence-retention decision, and return to Task 3 plus a new
+real recovery drill. Never silently overwrite or reuse invalidated public
+evidence. TTY prompt and echo-suppression hardening does not invalidate the
+cryptographic recovery result when those boundaries remain unchanged; retain
+the existing evidence only with focused secret-canary coverage and fresh
+exact-head CI. A documentation-only correction that does not affect those
+boundaries may proceed with fresh local and remote verification.
 
 If the new head is rate-limited or lacks a fresh substantive review, report
 that as a new limitation through AskHuman and stop for a decision. Do not reuse

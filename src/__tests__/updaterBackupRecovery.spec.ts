@@ -23,6 +23,7 @@ interface TextResult {
 }
 
 interface HarnessOptions {
+  delayedReadSetup?: boolean;
   existingEvidence?: boolean;
   signatureMetadataInvalid?: boolean;
   signerFails?: boolean;
@@ -350,8 +351,24 @@ function createHarness(options: HarnessOptions = {}): Harness {
     writeFileSync(join(evidenceDirectory, "sentinel"), "preserve\n");
   }
 
+  const bashEnvironment = join(fixtureRoot, "delay-read-setup.sh");
+  if (options.delayedReadSetup) {
+    writeFileSync(
+      bashEnvironment,
+      [
+        "read() {",
+        "  sleep 0.2",
+        '  builtin read "$@"',
+        "}",
+        "export -f read",
+        "",
+      ].join("\n"),
+    );
+  }
+
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
+    ...(options.delayedReadSetup ? { BASH_ENV: bashEnvironment } : {}),
     PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
     TMPDIR: `${privateTempDirectory}/`,
     FAKE_AUDIT_DIRECTORY: auditDirectory,
@@ -508,6 +525,14 @@ describeOnPosix("updater signing backup recovery drill", () => {
       readFileSync(harness.restoredKeyPath, "utf8").trim(),
     );
     expect(readdirSync(harness.privateTempDirectory)).toEqual([]);
+    expectNoSecrets(result, harness);
+  });
+
+  it("keeps hidden input silent when read setup is delayed", async () => {
+    const harness = createHarness({ delayedReadSetup: true });
+    const result = await harness.run();
+
+    expect(result.status).toBe(0);
     expectNoSecrets(result, harness);
   });
 

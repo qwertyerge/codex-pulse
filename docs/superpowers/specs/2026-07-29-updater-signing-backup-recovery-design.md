@@ -213,7 +213,10 @@ not offer a real-secret debug mode.
 
 The restored-key path and passphrase are read silently from `/dev/tty`. The
 path is never passed in command-line arguments. The passphrase is never passed
-with `--password`, printed, persisted, or written to shell history.
+with `--password`, printed, persisted, or written to shell history. The Bash
+`read` builtin owns both silent-mode activation and prompt emission in one
+call, so fast input cannot land between a separately printed prompt and echo
+suppression.
 
 The restored encrypted key is copied to a `mktemp` directory with directory
 mode `0700` and file mode `0600`. The script validates that the copy uses the
@@ -281,6 +284,14 @@ The script never overwrites an existing evidence directory. Re-running a
 completed drill requires an explicit, separately reviewed evidence-retention
 decision.
 
+Existing evidence is invalidated by changes to the signing identity or public
+key, encrypted-key parsing or copied bytes, signer invocation or secret
+environment, signature verifier or its exact dependencies, fixture semantics,
+or evidence schema/content semantics. TTY prompt and echo-suppression
+hardening does not invalidate the cryptographic recovery result when all of
+those boundaries remain unchanged; it requires focused secret-canary coverage
+and fresh exact-head CI instead.
+
 ## Test Strategy
 
 ### Shell contract and orchestration
@@ -297,6 +308,8 @@ pseudo-terminal boundary where required. It covers:
 - raw signer output is not copied into evidence;
 - secret canaries do not appear in stdout, stderr, fixture, signature,
   verification JSON, or repository paths;
+- hidden input remains absent from pseudo-terminal output even when `read`
+  setup is deliberately delayed after the harness observes a prompt;
 - outer and decoded signature documents contain only the exact approved
   comments and base64 signature bodies;
 - signing failure, verification failure, and unexpected negative-check
