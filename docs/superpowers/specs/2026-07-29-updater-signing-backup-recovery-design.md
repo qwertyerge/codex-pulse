@@ -259,9 +259,11 @@ restored-key path.
 
 An exit trap first restores any saved terminal state, then unsets
 secret-bearing shell variables and deletes the exact temporary directory
-created by this run. This restoration path covers read failure and any
-catchable termination that reaches `EXIT`; an uncatchable process or host
-failure remains outside the script's guarantees.
+created by this run. Explicit `HUP`, `INT`, and `TERM` traps exit with status
+`129`, `130`, and `143`, respectively, so each catchable signal passes through
+the `EXIT` cleanup. This restoration path covers read failure and those
+catchable terminations; an uncatchable process or host failure remains outside
+the script's guarantees.
 
 ## Preconditions and Fail-Closed Behavior
 
@@ -324,6 +326,9 @@ pseudo-terminal boundary where required. It covers:
   entry into the builtin after the harness observes the prompt;
 - the original terminal state is restored after hidden input succeeds or
   fails;
+- `HUP`, `INT`, and `TERM` during the prompt-to-read delay exit with their
+  standard `128 + signal` status, restore the original terminal state, remove
+  transient data, and emit no secret canary;
 - outer and decoded signature documents contain only the exact approved
   comments and base64 signature bodies;
 - signing failure, verification failure, and unexpected negative-check
