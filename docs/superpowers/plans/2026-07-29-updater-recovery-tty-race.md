@@ -53,7 +53,9 @@ harness, GitHub CLI, GitHub Actions.
 - Consumes: the real copied recovery script and a real pseudo-terminal.
 - Produces: `signalDuringHiddenRead?: "HUP" | "INT" | "TERM"` in
   `HarnessOptions`; each harness result contains
-  `tty_state_restored=true`; `delayedReadSetup` reproduces Apple's ordering.
+  `tty_state_restored=true`; `delayedReadSetup` reproduces Apple's ordering;
+  the recovery describe block uses a 15-second Vitest timeout consistent with
+  its existing PTY watchdog and the repository's other external-process suite.
 
 - [ ] **Step 1: Add a PTY driver that compares terminal state around the script**
 
@@ -142,6 +144,17 @@ four response values only in the parent Expect environment, which already
 unsets each one before spawning the recovery child.
 
 - [ ] **Step 3: Specify delayed-input and signal behavior**
+
+Change the suite declaration to:
+
+```ts
+describeOnPosix(
+  "updater signing backup recovery drill",
+  { timeout: 15_000 },
+  () => {
+```
+
+Replace the suite's final `});` with `  },` followed by `);`.
 
 Rename the existing delayed test to:
 
