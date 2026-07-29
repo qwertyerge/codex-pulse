@@ -255,7 +255,7 @@ afterEach(() => {
 const describeOnPosix =
   process.platform === "win32" ? describe.skip : describe;
 
-describeOnPosix("local macOS updater signing runbook", () => {
+describeOnPosix("local macOS updater signing runbook", { timeout: 15_000 }, () => {
   it("prints help without requiring a toolchain", () => {
     const script = requireSourceScript();
     const result = runText("/bin/bash", [script, "--help"], {
@@ -272,32 +272,28 @@ describeOnPosix("local macOS updater signing runbook", () => {
     expect(result.stdout).toContain("APPLE_SIGNING_IDENTITY");
   });
 
-  it(
-    "builds and verifies a bundle with the default identity",
-    () => {
-      const script = requireSourceScript();
-      expect(statSync(script).mode & constants.S_IXUSR).toBeTruthy();
+  it("builds and verifies a bundle with the default identity", () => {
+    const script = requireSourceScript();
+    expect(statSync(script).mode & constants.S_IXUSR).toBeTruthy();
 
-      const syntax = runText("/bin/bash", ["-n", script], {
-        cwd: repositoryRoot,
-        env: process.env,
-      });
-      expect(syntax.status).toBe(0);
+    const syntax = runText("/bin/bash", ["-n", script], {
+      cwd: repositoryRoot,
+      env: process.env,
+    });
+    expect(syntax.status).toBe(0);
 
-      const harness = createHarness();
-      const result = harness.run();
+    const harness = createHarness();
+    const result = harness.run();
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("version=0.3.2");
-      expect(result.stdout).toContain("architecture=arm64");
-      expect(result.stdout).toContain(
-        "bundle_and_archive_executable_sha256=",
-      );
-      expect(readdirSync(harness.auditRoot)).toEqual([]);
-      expectNoSecret(result, harness);
-    },
-    15_000,
-  );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("version=0.3.2");
+    expect(result.stdout).toContain("architecture=arm64");
+    expect(result.stdout).toContain(
+      "bundle_and_archive_executable_sha256=",
+    );
+    expect(readdirSync(harness.auditRoot)).toEqual([]);
+    expectNoSecret(result, harness);
+  });
 
   it("honors an explicitly supplied Apple signing identity", () => {
     const harness = createHarness({
