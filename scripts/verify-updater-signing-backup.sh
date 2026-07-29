@@ -49,6 +49,7 @@ for required_command in \
   pnpm \
   rm \
   shasum \
+  stty \
   tr \
   uname \
   uuidgen
@@ -107,8 +108,19 @@ private_directory=""
 public_staging=""
 temporary_root="${TMPDIR:-/tmp}"
 temporary_root="${temporary_root%/}"
+saved_tty_state=""
+
+restore_tty() {
+  [[ -n "$saved_tty_state" ]] || return 0
+  stty "$saved_tty_state" < /dev/tty || return 1
+  saved_tty_state=""
+}
 
 cleanup() {
+  if ! restore_tty; then
+    printf 'recovery_cleanup_failed=tty\n' >&2
+  fi
+  unset saved_tty_state
   unset restored_key_path
   unset restored_key_password
   unset restored_key_encoded
@@ -144,12 +156,27 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 read_hidden() {
   local prompt="$1"
   local destination="$2"
-  IFS= read -r -s -p "$prompt " "$destination" < /dev/tty
-  printf '\n' > /dev/tty
+  local read_status=0
+
+  saved_tty_state="$(stty -g < /dev/tty)" ||
+    fail "tty-state"
+  stty -echo < /dev/tty ||
+    fail "tty-state"
+  IFS= read -r -s -p "$prompt " "$destination" < /dev/tty ||
+    read_status=$?
+  if ! printf '\n' > /dev/tty; then
+    read_status=1
+  fi
+  restore_tty ||
+    fail "tty-restore"
+  return "$read_status"
 }
 
 read_hidden "Restored encrypted key path (hidden):" restored_key_path

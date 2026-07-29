@@ -25,6 +25,7 @@ interface TextResult {
 interface HarnessOptions {
   delayedReadSetup?: boolean;
   existingEvidence?: boolean;
+  signalDuringHiddenRead?: "HUP" | "INT" | "TERM";
   signatureMetadataInvalid?: boolean;
   signerFails?: boolean;
   verifierFails?: boolean;
@@ -198,6 +199,29 @@ function createHarness(options: HarnessOptions = {}): Harness {
   copyFileSync(sourceScript, fixtureScript);
   chmodSync(fixtureScript, 0o755);
 
+  const ptyDriver = join(fixtureRoot, "run-recovery-in-pty.sh");
+  writeExecutable(
+    ptyDriver,
+    [
+      "#!/usr/bin/env bash",
+      "set +e",
+      'driver_directory="$(',
+      '  cd "$(dirname "${BASH_SOURCE[0]}")"',
+      "  pwd -P",
+      ')"',
+      'original_tty_state="$(stty -g < /dev/tty)"',
+      '/bin/bash "$driver_directory/scripts/verify-updater-signing-backup.sh"',
+      'recovery_status="$?"',
+      'restored_tty_state="$(stty -g < /dev/tty)"',
+      'if [[ "$restored_tty_state" == "$original_tty_state" ]]; then',
+      "  printf 'tty_state_restored=true\\n'",
+      "else",
+      "  printf 'tty_state_restored=false\\n'",
+      "fi",
+      'exit "$recovery_status"',
+    ].join("\n"),
+  );
+
   mkdirSync(join(fixtureRoot, "src-tauri"), { recursive: true });
   mkdirSync(join(fixtureRoot, "docs/superpowers/reports"), {
     recursive: true,
@@ -352,13 +376,38 @@ function createHarness(options: HarnessOptions = {}): Harness {
   }
 
   const bashEnvironment = join(fixtureRoot, "delay-read-setup.sh");
-  if (options.delayedReadSetup) {
+  if (options.delayedReadSetup || options.signalDuringHiddenRead) {
     writeFileSync(
       bashEnvironment,
       [
+        "read_call_count=0",
         "read() {",
+        '  local prompt=""',
+        "  local saw_prompt=0",
+        "  local -a read_arguments=()",
+        "  read_call_count=$((read_call_count + 1))",
+        '  while [[ "$#" -gt 0 ]]; do',
+        '    case "$1" in',
+        "      -p)",
+        '        prompt="$2"',
+        "        saw_prompt=1",
+        "        shift 2",
+        "        ;;",
+        "      *)",
+        '        read_arguments[${#read_arguments[@]}]="$1"',
+        "        shift",
+        "        ;;",
+        "    esac",
+        "  done",
+        '  if [[ "$saw_prompt" -eq 1 ]]; then',
+        '    printf "%s" "$prompt" > /dev/tty',
+        "  fi",
+        '  if [[ "$read_call_count" -eq 3 && -n "${FAKE_READ_SIGNAL:-}" ]]; then',
+        "    sleep 0.2",
+        '    kill "-$FAKE_READ_SIGNAL" "$$"',
+        "  fi",
         "  sleep 0.2",
-        '  builtin read "$@"',
+        '  builtin read "${read_arguments[@]}"',
         "}",
         "export -f read",
         "",
@@ -368,13 +417,16 @@ function createHarness(options: HarnessOptions = {}): Harness {
 
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
-    ...(options.delayedReadSetup ? { BASH_ENV: bashEnvironment } : {}),
+    ...(options.delayedReadSetup || options.signalDuringHiddenRead
+      ? { BASH_ENV: bashEnvironment }
+      : {}),
     PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
     TMPDIR: `${privateTempDirectory}/`,
     FAKE_AUDIT_DIRECTORY: auditDirectory,
     FAKE_INVALID_PUBLIC_SIGNATURE: invalidPublicSignature,
     FAKE_PASSWORD: passwordCanary,
     FAKE_PUBLIC_SIGNATURE: fakePublicSignature,
+    FAKE_READ_SIGNAL: options.signalDuringHiddenRead ?? "",
     FAKE_SIGNATURE_METADATA_INVALID:
       options.signatureMetadataInvalid ? "1" : "0",
     FAKE_RESTORED_KEY_PATH: restoredKeyPath,
@@ -399,7 +451,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
     privateTempDirectory,
     restoredKeyPath,
     run: (responses = ["yes", "yes", restoredKeyPath, passwordCanary]) =>
-      runInPty(fixtureScript, fixtureRoot, environment, responses),
+      runInPty(ptyDriver, fixtureRoot, environment, responses),
   };
 }
 
@@ -422,6 +474,12 @@ function expectNoSecrets(result: TextResult, harness: Harness) {
   expect(observable).not.toContain(
     readFileSync(harness.restoredKeyPath, "utf8").trim(),
   );
+  expect(`${result.stdout}\n${result.stderr}`).toContain(
+    "tty_state_restored=true",
+  );
+  expect(`${result.stdout}\n${result.stderr}`).not.toContain(
+    "tty_state_restored=false",
+  );
 }
 
 afterEach(() => {
@@ -433,7 +491,7 @@ afterEach(() => {
 const describeOnPosix =
   process.platform === "win32" ? describe.skip : describe;
 
-describeOnPosix("updater signing backup recovery drill", () => {
+describeOnPosix("updater signing backup recovery drill", { timeout: 15_000 }, () => {
   it("prints help without requesting a secret", () => {
     expect(existsSync(sourceScript)).toBe(true);
     expect(statSync(sourceScript).mode & constants.S_IXUSR).toBeTruthy();
@@ -528,13 +586,33 @@ describeOnPosix("updater signing backup recovery drill", () => {
     expectNoSecrets(result, harness);
   });
 
-  it("keeps hidden input silent when read setup is delayed", async () => {
+  it("keeps hidden input silent across Apple Bash's prompt-to-noecho delay", async () => {
     const harness = createHarness({ delayedReadSetup: true });
     const result = await harness.run();
 
     expect(result.status).toBe(0);
     expectNoSecrets(result, harness);
   });
+
+  it.each([
+    ["HUP", 129],
+    ["INT", 130],
+    ["TERM", 143],
+  ] as const)(
+    "restores the terminal after %s during hidden input",
+    async (signal, expectedStatus) => {
+      const harness = createHarness({
+        delayedReadSetup: true,
+        signalDuringHiddenRead: signal,
+      });
+      const result = await harness.run();
+
+      expect(result.status).toBe(expectedStatus);
+      expect(existsSync(harness.evidenceDirectory)).toBe(false);
+      expect(readdirSync(harness.privateTempDirectory)).toEqual([]);
+      expectNoSecrets(result, harness);
+    },
+  );
 
   it.each<[string, string[]]>([
     ["key-source attestation", ["no"]],
