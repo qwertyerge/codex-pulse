@@ -66,7 +66,7 @@ describe("automatic updater configuration", () => {
     expect(updater?.pubkey).toMatch(/^[A-Za-z0-9+/=]{100,}$/);
   });
 
-  it("keeps the bootstrap release version aligned", () => {
+  it("keeps the 0.4.1 release version aligned", () => {
     const packageJson = JSON.parse(read("package.json")) as { version: string };
     const tauri = JSON.parse(read("src-tauri/tauri.conf.json")) as {
       version: string;
@@ -78,10 +78,10 @@ describe("automatic updater configuration", () => {
       cargoLock: codexPulseVersionFromCargoLock(read("src-tauri/Cargo.lock")),
       tauri: tauri.version
     }).toEqual({
-      packageJson: "0.4.0",
-      cargoToml: "0.4.0",
-      cargoLock: "0.4.0",
-      tauri: "0.4.0"
+      packageJson: "0.4.1",
+      cargoToml: "0.4.1",
+      cargoLock: "0.4.1",
+      tauri: "0.4.1"
     });
   });
 
