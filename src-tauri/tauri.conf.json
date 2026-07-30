@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Codex Pulse",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "identifier": "com.codexpulse.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -38,7 +38,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFFMTQ3QTYzNkJCNkIxNkUKUldSdXNiWnJZM29Vcmt4L04vL0dOMzVnamZ5SU54R041MWwyNG41ZFZNN2ZQdHNobngxUGFEeXoK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEEwMEQ1OEMwOTIwQ0JEMUYKUldRZnZReVN3RmdOb05sWmh5dUI4TTRudEJuTGZ2RVQzTlViQUVSd2dsclMvVVNPdDZEeHlhU2QK",
       "endpoints": [
         "https://github.com/qwertyerge/codex-pulse/releases/latest/download/latest.json"
       ],

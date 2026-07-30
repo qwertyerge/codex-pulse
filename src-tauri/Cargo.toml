@@ -1,6 +1,6 @@
 [package]
 name = "codex-pulse"
-version = "0.3.2"
+version = "0.4.0"
 description = "A local desktop monitor for active Codex sessions"
 license = "Apache-2.0"
 repository = "https://github.com/qwertyerge/codex-pulse"
@@ -40,5 +40,7 @@ uuid = "1"
 url = "2"
 
 [dev-dependencies]
+base64 = "=0.22.1"
+minisign-verify = "=0.2.5"
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"

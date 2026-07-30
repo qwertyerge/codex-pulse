@@ -1,0 +1,6 @@
+schema=codex-pulse-updater-backup-recovery-v1
+repository=qwertyerge/codex-pulse
+release=0.4.0
+source_commit=ca6f551867dab8b4ec34eca7df8a1c958d6a3e0c
+verified_at_utc=2026-07-29T14:48:29Z
+nonce=ad1a90d6-cd7b-411b-9e9c-d071d39a4109

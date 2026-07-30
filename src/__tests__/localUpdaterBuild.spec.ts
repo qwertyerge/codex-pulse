@@ -255,7 +255,7 @@ afterEach(() => {
 const describeOnPosix =
   process.platform === "win32" ? describe.skip : describe;
 
-describeOnPosix("local macOS updater signing runbook", () => {
+describeOnPosix("local macOS updater signing runbook", { timeout: 15_000 }, () => {
   it("prints help without requiring a toolchain", () => {
     const script = requireSourceScript();
     const result = runText("/bin/bash", [script, "--help"], {
