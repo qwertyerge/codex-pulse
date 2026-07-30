@@ -507,6 +507,7 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
     if !state.refresh_gate.request() {
         return;
     }
+    drop(state);
     start_refresh(app);
 }
 
