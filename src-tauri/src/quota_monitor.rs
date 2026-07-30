@@ -38,6 +38,8 @@ pub enum QuotaMonitorEvent {
 struct MonitorConfig {
     debounce: Duration,
     reconnect_delays: Vec<Duration>,
+    #[cfg(test)]
+    reconnect_delay_tx: Option<mpsc::UnboundedSender<Duration>>,
 }
 
 impl Default for MonitorConfig {
@@ -51,6 +53,8 @@ impl Default for MonitorConfig {
                 Duration::from_secs(10),
                 Duration::from_secs(30),
             ],
+            #[cfg(test)]
+            reconnect_delay_tx: None,
         }
     }
 }
@@ -105,6 +109,10 @@ async fn run_monitor(
         }
 
         let delay = reconnect_delay(&config.reconnect_delays, reconnect_attempt);
+        #[cfg(test)]
+        if let Some(reconnect_delay_tx) = &config.reconnect_delay_tx {
+            let _ = reconnect_delay_tx.send(delay);
+        }
         reconnect_attempt = reconnect_attempt.saturating_add(1);
         tokio::select! {
             _ = sleep(delay) => {}
@@ -251,21 +259,19 @@ mod tests {
             .executable
     }
 
-    fn read_start_times(path: &Path) -> Vec<u128> {
+    fn completed_handshake_count(path: &Path) -> usize {
         std::fs::read_to_string(path)
             .unwrap_or_default()
             .lines()
-            .map(|line| {
-                line.parse()
-                    .expect("fixture start is a millisecond timestamp")
-            })
-            .collect()
+            .filter(|line| *line == "completed")
+            .count()
     }
 
     fn test_config() -> MonitorConfig {
         MonitorConfig {
             debounce: Duration::from_millis(30),
             reconnect_delays: vec![Duration::from_millis(10)],
+            reconnect_delay_tx: None,
         }
     }
 
@@ -331,42 +337,53 @@ mod tests {
     #[tokio::test]
     async fn handshake_then_exit_uses_escalating_capped_backoff() {
         let fixture = exit_after_initialize_fixture().to_path_buf();
-        let starts_path = fixture.with_extension("starts");
-        let _ = std::fs::remove_file(&starts_path);
+        let handshakes_path = fixture.with_extension("handshakes");
+        let _ = std::fs::remove_file(&handshakes_path);
         let (updates_tx, _updates_rx) = mpsc::unbounded_channel();
+        let (reconnect_delay_tx, mut reconnect_delay_rx) = mpsc::unbounded_channel();
         let handle = spawn_quota_monitor_with_config(
             vec![fixture],
             updates_tx,
             MonitorConfig {
                 debounce: Duration::from_millis(30),
                 reconnect_delays: vec![
-                    Duration::from_millis(100),
-                    Duration::from_millis(300),
-                    Duration::from_millis(600),
+                    Duration::from_millis(10),
+                    Duration::from_millis(30),
+                    Duration::from_millis(60),
                 ],
+                reconnect_delay_tx: Some(reconnect_delay_tx),
             },
         );
 
-        let starts = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let starts = read_start_times(&starts_path);
-                if starts.len() >= 5 {
-                    break starts;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+        let observed_delays = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut observed = Vec::new();
+            for _ in 0..4 {
+                observed.push(
+                    reconnect_delay_rx
+                        .recv()
+                        .await
+                        .expect("monitor reports reconnect delay"),
+                );
             }
+            observed
         })
         .await
-        .expect("five reconnect attempts complete");
+        .expect("four reconnect delays are selected");
         drop(handle);
 
-        let gaps: Vec<u128> = starts
-            .windows(2)
-            .map(|window| window[1] - window[0])
-            .collect();
-        assert!(
-            gaps[0] >= 80 && gaps[1] >= 250 && gaps[2] >= 550 && gaps[3] >= 550,
-            "expected escalating 100/300/600/600 ms backoff, observed {gaps:?}"
+        assert_eq!(
+            observed_delays,
+            vec![
+                Duration::from_millis(10),
+                Duration::from_millis(30),
+                Duration::from_millis(60),
+                Duration::from_millis(60),
+            ]
+        );
+        assert_eq!(
+            completed_handshake_count(&handshakes_path),
+            4,
+            "every observed delay follows a completed handshake and short session"
         );
     }
 
