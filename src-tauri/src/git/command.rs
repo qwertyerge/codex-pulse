@@ -10,7 +10,7 @@ use std::{
 #[cfg(test)]
 use std::sync::mpsc::SyncSender;
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Debug)]
@@ -102,14 +102,42 @@ fn collect_pipe(
         .map_err(GitCommandError::Wait)
 }
 
-fn configure_process(command: &mut Command) {
-    #[cfg(windows)]
-    {
+#[cfg(any(windows, test))]
+trait WindowsSpawnCommand {
+    type Child;
+
+    fn set_creation_flags(&mut self, flags: u32);
+    fn spawn(&mut self) -> std::io::Result<Self::Child>;
+}
+
+#[cfg(windows)]
+impl WindowsSpawnCommand for Command {
+    type Child = Child;
+
+    fn set_creation_flags(&mut self, flags: u32) {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(CREATE_NO_WINDOW);
+        self.creation_flags(flags);
     }
-    #[cfg(not(windows))]
-    let _ = command;
+
+    fn spawn(&mut self) -> std::io::Result<Self::Child> {
+        Command::spawn(self)
+    }
+}
+
+#[cfg(any(windows, test))]
+fn spawn_windows_process<C: WindowsSpawnCommand>(command: &mut C) -> std::io::Result<C::Child> {
+    command.set_creation_flags(CREATE_NO_WINDOW);
+    command.spawn()
+}
+
+#[cfg(windows)]
+fn spawn_configured(command: &mut Command) -> std::io::Result<Child> {
+    spawn_windows_process(command)
+}
+
+#[cfg(not(windows))]
+fn spawn_configured(command: &mut Command) -> std::io::Result<Child> {
+    command.spawn()
 }
 
 fn terminate_and_reap(mut child: Child, reap_timeout: Duration) -> Option<Child> {
@@ -173,8 +201,7 @@ impl GitRunner for ProcessGitRunner {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        configure_process(&mut command);
-        let mut child = command.spawn().map_err(GitCommandError::Spawn)?;
+        let mut child = spawn_configured(&mut command).map_err(GitCommandError::Spawn)?;
 
         let stdout = child.stdout.take().expect("stdout is piped");
         let stderr = child.stderr.take().expect("stderr is piped");
@@ -234,7 +261,9 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use super::{GitCommandError, GitRunner, ProcessGitRunner};
+    use super::{
+        spawn_windows_process, GitCommandError, GitRunner, ProcessGitRunner, WindowsSpawnCommand,
+    };
 
     struct ProcessFixture {
         _directory: tempfile::TempDir,
@@ -278,10 +307,34 @@ mod tests {
         ProcessGitRunner::new(process_fixture().to_path_buf(), timeout)
     }
 
-    #[cfg(windows)]
+    #[derive(Default)]
+    struct RecordingWindowsCommand {
+        creation_flags: Option<u32>,
+        calls: Vec<&'static str>,
+    }
+
+    impl WindowsSpawnCommand for RecordingWindowsCommand {
+        type Child = ();
+
+        fn set_creation_flags(&mut self, flags: u32) {
+            self.creation_flags = Some(flags);
+            self.calls.push("creation_flags");
+        }
+
+        fn spawn(&mut self) -> std::io::Result<Self::Child> {
+            self.calls.push("spawn");
+            Ok(())
+        }
+    }
+
     #[test]
-    fn windows_process_creation_flags_hide_console() {
-        assert_eq!(super::CREATE_NO_WINDOW, 0x0800_0000);
+    fn windows_process_creation_flags_are_applied_before_spawn() {
+        let mut command = RecordingWindowsCommand::default();
+
+        spawn_windows_process(&mut command).unwrap();
+
+        assert_eq!(command.creation_flags, Some(0x0800_0000));
+        assert_eq!(command.calls, ["creation_flags", "spawn"]);
     }
 
     #[test]
