@@ -40,6 +40,7 @@ pub fn run() -> anyhow::Result<()> {
                         "Live hook listener unavailable: {error:#}"
                     ));
             }
+            crate::commands::start_official_quota_monitor(app.handle().clone());
             crate::commands::start_fallback_reconciliation(app.handle().clone());
             Ok(())
         })
@@ -77,7 +78,7 @@ struct MainWindowPlatformPolicy {
 fn main_window_platform_policy(target_os: &str) -> MainWindowPlatformPolicy {
     if target_os == "windows" {
         MainWindowPlatformPolicy {
-            maximizable: false,
+            maximizable: true,
             maximize_on_create: false,
         }
     } else {
@@ -86,6 +87,15 @@ fn main_window_platform_policy(target_os: &str) -> MainWindowPlatformPolicy {
             maximize_on_create: true,
         }
     }
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn maximize_width_constraint_warning<E: std::fmt::Display>(
+    result: Result<(), E>,
+) -> Option<String> {
+    result
+        .err()
+        .map(|error| format!("Codex Pulse maximize width constraint unavailable: {error}"))
 }
 
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
@@ -110,6 +120,13 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .resizable(true)
         .maximizable(platform_policy.maximizable)
         .build()?;
+
+    #[cfg(target_os = "windows")]
+    if let Some(warning) = maximize_width_constraint_warning(
+        crate::windows_window::install_maximize_width_constraint(&window),
+    ) {
+        eprintln!("{warning}");
+    }
 
     if platform_policy.maximize_on_create {
         let _ = window.maximize();
@@ -137,7 +154,10 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
 mod tests {
     use tauri::{LogicalUnit, PixelUnit};
 
-    use super::{main_window_platform_policy, main_window_size_constraints};
+    use super::{
+        main_window_platform_policy, main_window_size_constraints,
+        maximize_width_constraint_warning,
+    };
 
     #[test]
     fn main_window_uses_pd_measured_bounds() {
@@ -159,11 +179,24 @@ mod tests {
     }
 
     #[test]
-    fn windows_main_window_starts_compact_and_cannot_maximize() {
+    fn windows_main_window_starts_compact_and_can_maximize() {
         let policy = main_window_platform_policy("windows");
 
-        assert!(!policy.maximizable);
+        assert!(policy.maximizable);
         assert!(!policy.maximize_on_create);
+    }
+
+    #[test]
+    fn maximize_width_constraint_failure_is_nonfatal() {
+        assert_eq!(
+            maximize_width_constraint_warning::<&str>(Err("subclass failed")).as_deref(),
+            Some("Codex Pulse maximize width constraint unavailable: subclass failed")
+        );
+    }
+
+    #[test]
+    fn successful_maximize_width_constraint_has_no_warning() {
+        assert_eq!(maximize_width_constraint_warning::<&str>(Ok(())), None);
     }
 
     #[test]

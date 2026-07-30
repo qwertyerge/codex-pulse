@@ -1,7 +1,9 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicI64, AtomicU8, Ordering},
     Mutex, RwLock,
 };
+#[cfg(debug_assertions)]
+use std::time::Instant;
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
@@ -24,7 +26,8 @@ use crate::model::{
     AppSnapshot, InitializationPhase, InitializationSnapshot, LocaleMode, MonitoringView,
     RecentEvent, SessionSnapshot, ThemeMode, WeeklyQuota,
 };
-use crate::monitor::{scan_active_sessions_with_cache, QuotaSourceCache};
+use crate::monitor::scan_active_sessions_with_cache;
+use crate::quota_monitor::{spawn_quota_monitor, QuotaMonitorEvent, QuotaRefreshHandle};
 
 pub struct AppState {
     pub codex_home: PathBuf,
@@ -34,10 +37,12 @@ pub struct AppState {
     cached_snapshot: RwLock<CachedSnapshot>,
     scan_cache: Mutex<ScanCache>,
     git_enricher: Mutex<GitSessionEnricher<GitRepositoryResolver<ProcessGitRunner>>>,
-    quota_source_cache: Mutex<QuotaSourceCache>,
+    quota_refresh: Mutex<Option<QuotaRefreshHandle>>,
     initialization: Mutex<InitializationFeed>,
     recent_event_display: Mutex<HashMap<String, DisplayedRecentEvent>>,
-    refresh_in_flight: AtomicBool,
+    recent_event_wakeup: DeadlineWakeup,
+    hook_settle_wakeup: DeadlineWakeup,
+    refresh_gate: RefreshGate,
 }
 
 #[derive(Default)]
@@ -47,7 +52,147 @@ struct CachedSnapshot {
 }
 
 const RECENT_EVENT_COALESCE_MS: i64 = 5_000;
+const OFFICIAL_QUOTA_MAX_AGE_MS: i64 = 5 * 60 * 1_000;
+const HOOK_SETTLE_DELAY_MS: i64 = 2_000;
 pub const FALLBACK_RECONCILIATION_SECONDS: u64 = 60;
+const REFRESH_IDLE: u8 = 0;
+const REFRESH_RUNNING: u8 = 1;
+const REFRESH_RUNNING_PENDING: u8 = 2;
+
+#[derive(Default)]
+struct RefreshGate(AtomicU8);
+
+impl RefreshGate {
+    fn request(&self) -> bool {
+        loop {
+            match self.0.load(Ordering::Acquire) {
+                REFRESH_IDLE => {
+                    if self
+                        .0
+                        .compare_exchange(
+                            REFRESH_IDLE,
+                            REFRESH_RUNNING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return true;
+                    }
+                }
+                REFRESH_RUNNING => {
+                    if self
+                        .0
+                        .compare_exchange(
+                            REFRESH_RUNNING,
+                            REFRESH_RUNNING_PENDING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return false;
+                    }
+                }
+                REFRESH_RUNNING_PENDING => return false,
+                _ => unreachable!("refresh gate contains an invalid state"),
+            }
+        }
+    }
+
+    fn complete(&self) -> bool {
+        loop {
+            match self.0.load(Ordering::Acquire) {
+                REFRESH_RUNNING => {
+                    if self
+                        .0
+                        .compare_exchange(
+                            REFRESH_RUNNING,
+                            REFRESH_IDLE,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return false;
+                    }
+                }
+                REFRESH_RUNNING_PENDING => {
+                    if self
+                        .0
+                        .compare_exchange(
+                            REFRESH_RUNNING_PENDING,
+                            REFRESH_RUNNING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return true;
+                    }
+                }
+                REFRESH_IDLE => return false,
+                _ => unreachable!("refresh gate contains an invalid state"),
+            }
+        }
+    }
+
+    fn is_running(&self) -> bool {
+        self.0.load(Ordering::Acquire) != REFRESH_IDLE
+    }
+}
+
+#[derive(Default)]
+struct DeadlineWakeup(AtomicI64);
+
+impl DeadlineWakeup {
+    fn arm_earliest(&self, deadline_ms: i64) -> bool {
+        loop {
+            let current = self.0.load(Ordering::Acquire);
+            if current != 0 && current <= deadline_ms {
+                return false;
+            }
+            if self
+                .0
+                .compare_exchange(current, deadline_ms, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    fn claim(&self, deadline_ms: i64) -> bool {
+        self.0
+            .compare_exchange(deadline_ms, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Moves a single trailing wakeup later without creating another worker.
+    fn arm_latest(&self, deadline_ms: i64) -> bool {
+        loop {
+            let current = self.0.load(Ordering::Acquire);
+            if current >= deadline_ms {
+                return false;
+            }
+            if self
+                .0
+                .compare_exchange(current, deadline_ms, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return current == 0;
+            }
+        }
+    }
+
+    fn deadline(&self) -> i64 {
+        self.0.load(Ordering::Acquire)
+    }
+
+    fn clear(&self) {
+        self.0.store(0, Ordering::Release);
+    }
+}
 
 #[derive(Debug, Clone)]
 struct DisplayedRecentEvent {
@@ -75,10 +220,12 @@ impl AppState {
             cached_snapshot: RwLock::new(CachedSnapshot::default()),
             scan_cache: Mutex::new(ScanCache::default()),
             git_enricher: Mutex::new(GitSessionEnricher::new(resolver, cache)),
-            quota_source_cache: Mutex::new(QuotaSourceCache::default()),
+            quota_refresh: Mutex::new(None),
             initialization: Mutex::new(InitializationFeed::default()),
             recent_event_display: Mutex::new(HashMap::new()),
-            refresh_in_flight: AtomicBool::new(false),
+            recent_event_wakeup: DeadlineWakeup::default(),
+            hook_settle_wakeup: DeadlineWakeup::default(),
+            refresh_gate: RefreshGate::default(),
         }
     }
 
@@ -118,6 +265,26 @@ impl AppState {
             .map(|feed| feed.snapshot())
             .unwrap_or_default()
     }
+
+    fn install_quota_refresh(&self, handle: QuotaRefreshHandle) {
+        if let Ok(mut current) = self.quota_refresh.lock() {
+            *current = Some(handle);
+        }
+    }
+
+    fn request_quota_refresh(&self) {
+        if let Ok(current) = self.quota_refresh.lock() {
+            if let Some(handle) = current.as_ref() {
+                handle.request_refresh();
+            }
+        }
+    }
+
+    fn observe_weekly_quota(&self, quota: WeeklyQuota) {
+        if let Ok(mut cached) = self.cached_snapshot.write() {
+            cached.weekly_quota = Some(quota);
+        }
+    }
 }
 
 fn publish_initialization_event(
@@ -152,7 +319,8 @@ fn coalesce_recent_events(
     sessions: &mut [SessionSnapshot],
     display: &mut HashMap<String, DisplayedRecentEvent>,
     observed_at_ms: i64,
-) {
+) -> Option<i64> {
+    let mut earliest_deadline_ms = None;
     let visible_ids = sessions
         .iter()
         .map(|session| session.thread_id.clone())
@@ -176,27 +344,62 @@ fn coalesce_recent_events(
             continue;
         };
 
-        if candidate.occurred_at_ms > current.event.occurred_at_ms
-            && observed_at_ms - current.displayed_at_ms >= RECENT_EVENT_COALESCE_MS
-        {
-            current.event = candidate;
-            current.displayed_at_ms = observed_at_ms;
+        if candidate.occurred_at_ms > current.event.occurred_at_ms {
+            let deadline_ms = current.displayed_at_ms + RECENT_EVENT_COALESCE_MS;
+            if observed_at_ms >= deadline_ms {
+                current.event = candidate;
+                current.displayed_at_ms = observed_at_ms;
+                continue;
+            }
+            earliest_deadline_ms = Some(
+                earliest_deadline_ms.map_or(deadline_ms, |earliest: i64| earliest.min(deadline_ms)),
+            );
+            session.recent_event = Some(current.event.clone());
         } else {
             session.recent_event = Some(current.event.clone());
         }
+    }
+    earliest_deadline_ms
+}
+
+fn schedule_recent_event_wakeup(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    deadline_ms: Option<i64>,
+) {
+    let Some(deadline_ms) = deadline_ms else {
+        state.recent_event_wakeup.clear();
+        return;
+    };
+    if !state.recent_event_wakeup.arm_earliest(deadline_ms) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let delay_ms = deadline_ms
+            .saturating_sub(Utc::now().timestamp_millis())
+            .max(0) as u64;
+        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        let state = app.state::<AppState>();
+        if state.recent_event_wakeup.claim(deadline_ms) {
+            drop(state);
+            schedule_refresh(app);
+        }
+    });
+}
+
+fn replace_cached_sessions(state: &AppState, sessions: Vec<SessionSnapshot>) {
+    if let Ok(mut cached) = state.cached_snapshot.write() {
+        cached.sessions = sessions;
     }
 }
 
 pub fn snapshot_for_home(codex_home: &Path, now_ms: i64) -> Result<AppSnapshot> {
     let mut scan_cache = ScanCache::default();
     let scan = scan_active_sessions_with_cache(codex_home, now_ms, &mut scan_cache)?;
-    let mut quota_source_cache = QuotaSourceCache::default();
-    let weekly_quota = quota_source_cache
-        .latest_weekly_quota(codex_home, now_ms)
-        .or(scan.weekly_quota);
     Ok(AppSnapshot {
         sessions: scan.sessions,
-        weekly_quota,
+        weekly_quota: None,
         is_loading: false,
         initialization: InitializationSnapshot::default(),
         monitoring: MonitoringView {
@@ -257,15 +460,19 @@ pub fn set_locale(locale: LocaleMode, state: State<'_, AppState>) -> Result<Loca
 
 #[tauri::command]
 pub fn get_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
-    snapshot_for_state(&state)
+    snapshot_for_state_at(&state, Utc::now().timestamp_millis())
 }
 
-fn snapshot_for_state(state: &AppState) -> Result<AppSnapshot, String> {
+fn snapshot_for_state_at(state: &AppState, now_ms: i64) -> Result<AppSnapshot, String> {
     let (sessions, weekly_quota) = state.cached_snapshot();
+    let weekly_quota = weekly_quota.filter(|quota| {
+        quota.resets_at_ms > now_ms
+            && now_ms.saturating_sub(quota.observed_at_ms) <= OFFICIAL_QUOTA_MAX_AGE_MS
+    });
     let mut snapshot = AppSnapshot {
         sessions,
         weekly_quota,
-        is_loading: state.refresh_in_flight.load(Ordering::Acquire),
+        is_loading: state.refresh_gate.is_running(),
         initialization: state.cached_initialization(),
         monitoring: MonitoringView {
             enabled: false,
@@ -296,29 +503,83 @@ fn snapshot_for_state(state: &AppState) -> Result<AppSnapshot, String> {
 /// Runs the expensive JSONL/SQLite reconciliation away from the WebView invoke path.
 pub fn schedule_refresh(app: tauri::AppHandle) {
     let state = app.state::<AppState>();
-    if state.refresh_in_flight.swap(true, Ordering::AcqRel) {
+    state.request_quota_refresh();
+    if !state.refresh_gate.request() {
         return;
     }
+    drop(state);
+    start_refresh(app);
+}
+
+/// Refreshes immediately, then once more after Codex has had time to flush its transcript.
+///
+/// `UserPromptSubmit` runs before the corresponding JSONL record is guaranteed to be visible.
+/// Repeated hook notifications move one trailing worker later instead of spawning one per hook.
+pub fn schedule_hook_refresh(app: tauri::AppHandle) {
+    schedule_refresh(app.clone());
+
+    let observed_at_ms = Utc::now().timestamp_millis();
+    let deadline_ms = observed_at_ms.saturating_add(HOOK_SETTLE_DELAY_MS);
+    let should_start_worker = app
+        .state::<AppState>()
+        .hook_settle_wakeup
+        .arm_latest(deadline_ms);
+
+    #[cfg(debug_assertions)]
+    eprintln!(
+        "Codex Pulse hook notification: observed_at={observed_at_ms} settle_deadline={deadline_ms}"
+    );
+
+    if !should_start_worker {
+        return;
+    }
+
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let deadline_ms = app.state::<AppState>().hook_settle_wakeup.deadline();
+            if deadline_ms == 0 {
+                return;
+            }
+
+            let wait_ms = deadline_ms
+                .saturating_sub(Utc::now().timestamp_millis())
+                .max(0) as u64;
+            tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+
+            let claimed = app
+                .state::<AppState>()
+                .hook_settle_wakeup
+                .claim(deadline_ms);
+            if !claimed {
+                continue;
+            }
+
+            #[cfg(debug_assertions)]
+            eprintln!("Codex Pulse hook settle refresh: deadline={deadline_ms}");
+            schedule_refresh(app);
+            return;
+        }
+    });
+}
+
+fn start_refresh(app: tauri::AppHandle) {
+    let state = app.state::<AppState>();
     begin_initialization(&app, &state, Utc::now().timestamp_millis());
+    publish_initialization_event(
+        &app,
+        &state,
+        Utc::now().timestamp_millis(),
+        InitializationPhase::ReadingQuota,
+        "Requesting official weekly quota",
+    );
     let codex_home = state.codex_home.clone();
     let app_for_scan = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = tauri::async_runtime::spawn_blocking(move || {
             let state = app_for_scan.state::<AppState>();
             let now_ms = Utc::now().timestamp_millis();
-            publish_initialization_event(
-                &app_for_scan,
-                &state,
-                Utc::now().timestamp_millis(),
-                InitializationPhase::ReadingQuota,
-                "Reading bounded weekly quota observations",
-            );
-            let mut quota_source_cache = state
-                .quota_source_cache
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Codex Pulse quota source cache lock is poisoned"))?;
-            let weekly_quota = quota_source_cache.latest_weekly_quota(&codex_home, now_ms);
-            drop(quota_source_cache);
+            #[cfg(debug_assertions)]
+            let refresh_started_at = Instant::now();
             publish_initialization_event(
                 &app_for_scan,
                 &state,
@@ -333,6 +594,8 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
                 InitializationPhase::ReconcilingSessions,
                 "Reconciling active Codex sessions",
             );
+            #[cfg(debug_assertions)]
+            let sessions_started_at = Instant::now();
             let mut scan = {
                 let mut scan_cache = state
                     .scan_cache
@@ -340,27 +603,38 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
                     .map_err(|_| anyhow::anyhow!("Codex Pulse scan cache lock is poisoned"))?;
                 scan_active_sessions_with_cache(&codex_home, now_ms, &mut scan_cache)?
             };
+            #[cfg(debug_assertions)]
+            let sessions_elapsed = sessions_started_at.elapsed();
+            #[cfg(debug_assertions)]
+            let git_started_at = Instant::now();
             if let Ok(mut enricher) = state.git_enricher.lock() {
                 enricher.enrich(&mut scan.sessions, now_ms);
             }
-            scan.weekly_quota = weekly_quota.or(scan.weekly_quota);
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "Codex Pulse refresh timings: sessions={}ms git={}ms total={}ms",
+                sessions_elapsed.as_millis(),
+                git_started_at.elapsed().as_millis(),
+                refresh_started_at.elapsed().as_millis()
+            );
             Ok::<_, anyhow::Error>(scan)
         })
         .await;
         let state = app.state::<AppState>();
         match result {
             Ok(Ok(mut scan)) => {
-                if let Ok(mut display) = state.recent_event_display.lock() {
-                    coalesce_recent_events(
-                        &mut scan.sessions,
-                        &mut display,
-                        Utc::now().timestamp_millis(),
-                    );
-                }
-                if let Ok(mut cached) = state.cached_snapshot.write() {
-                    cached.sessions = scan.sessions;
-                    cached.weekly_quota = scan.weekly_quota;
-                }
+                let recent_event_deadline_ms =
+                    if let Ok(mut display) = state.recent_event_display.lock() {
+                        coalesce_recent_events(
+                            &mut scan.sessions,
+                            &mut display,
+                            Utc::now().timestamp_millis(),
+                        )
+                    } else {
+                        None
+                    };
+                replace_cached_sessions(&state, scan.sessions);
+                schedule_recent_event_wakeup(&app, &state, recent_event_deadline_ms);
                 publish_initialization_event(
                     &app,
                     &state,
@@ -384,8 +658,29 @@ pub fn schedule_refresh(app: tauri::AppHandle) {
                 format!("Reconciliation failed: {error}"),
             ),
         }
-        state.refresh_in_flight.store(false, Ordering::Release);
+        let run_again = state.refresh_gate.complete();
         let _ = app.emit(crate::hook::SESSIONS_CHANGED_EVENT, ());
+        drop(state);
+        if run_again {
+            start_refresh(app);
+        }
+    });
+}
+
+pub fn start_official_quota_monitor(app: tauri::AppHandle) {
+    let (updates_tx, mut updates_rx) = tokio::sync::mpsc::unbounded_channel();
+    let handle = spawn_quota_monitor(updates_tx);
+    app.state::<AppState>().install_quota_refresh(handle);
+
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = updates_rx.recv().await {
+            match event {
+                QuotaMonitorEvent::Observed(quota) => {
+                    app.state::<AppState>().observe_weekly_quota(quota);
+                    let _ = app.emit(crate::hook::SESSIONS_CHANGED_EVENT, ());
+                }
+            }
+        }
     });
 }
 
@@ -494,10 +789,13 @@ mod tests {
 
     use super::{
         coalesce_recent_events, set_always_on_top_config, set_locale_config, validate_external_url,
-        validate_project_path, AppState, FALLBACK_RECONCILIATION_SECONDS,
+        validate_project_path, AppState, DeadlineWakeup, RefreshGate,
+        FALLBACK_RECONCILIATION_SECONDS, HOOK_SETTLE_DELAY_MS,
     };
     use crate::config::ConfigStore;
-    use crate::model::{LocaleMode, RecentEvent, RecentEventPriority, SessionSnapshot};
+    use crate::model::{
+        LocaleMode, RecentEvent, RecentEventPriority, SessionSnapshot, WeeklyQuota,
+    };
 
     fn session(event: Option<RecentEvent>) -> SessionSnapshot {
         SessionSnapshot {
@@ -510,6 +808,29 @@ mod tests {
             recent_event: event,
             last_user_message: None,
         }
+    }
+
+    #[test]
+    fn refresh_gate_queues_one_trailing_refresh() {
+        let gate = RefreshGate::default();
+
+        assert!(gate.request());
+        assert!(gate.is_running());
+        assert!(!gate.request());
+        assert!(!gate.request());
+        assert!(gate.complete());
+        assert!(gate.is_running());
+        assert!(!gate.complete());
+        assert!(!gate.is_running());
+    }
+
+    #[test]
+    fn refresh_gate_can_start_again_after_completion() {
+        let gate = RefreshGate::default();
+
+        assert!(gate.request());
+        assert!(!gate.complete());
+        assert!(gate.request());
     }
 
     #[test]
@@ -528,15 +849,62 @@ mod tests {
         };
         let mut display = HashMap::new();
         let mut initial = vec![session(Some(first.clone()))];
-        coalesce_recent_events(&mut initial, &mut display, 10_000);
+        assert_eq!(
+            coalesce_recent_events(&mut initial, &mut display, 10_000),
+            None
+        );
 
         let mut within_window = vec![session(Some(second.clone()))];
-        coalesce_recent_events(&mut within_window, &mut display, 14_999);
+        assert_eq!(
+            coalesce_recent_events(&mut within_window, &mut display, 14_999),
+            Some(15_000)
+        );
         assert_eq!(within_window[0].recent_event, Some(first));
 
         let mut after_window = vec![session(Some(second.clone()))];
-        coalesce_recent_events(&mut after_window, &mut display, 15_000);
+        assert_eq!(
+            coalesce_recent_events(&mut after_window, &mut display, 15_000),
+            None
+        );
         assert_eq!(after_window[0].recent_event, Some(second));
+    }
+
+    #[test]
+    fn deadline_wakeup_keeps_the_earliest_effective_timer() {
+        let wakeup = DeadlineWakeup::default();
+
+        assert!(wakeup.arm_earliest(15_000));
+        assert!(!wakeup.arm_earliest(16_000));
+        assert!(wakeup.arm_earliest(14_000));
+        assert!(!wakeup.claim(15_000));
+        assert!(wakeup.claim(14_000));
+        assert!(!wakeup.claim(14_000));
+    }
+
+    #[test]
+    fn deadline_wakeup_can_cancel_a_timer() {
+        let wakeup = DeadlineWakeup::default();
+
+        assert!(wakeup.arm_earliest(15_000));
+        wakeup.clear();
+        assert!(!wakeup.claim(15_000));
+        assert!(wakeup.arm_earliest(20_000));
+    }
+
+    #[test]
+    fn deadline_wakeup_moves_a_trailing_timer_to_the_latest_deadline() {
+        let wakeup = DeadlineWakeup::default();
+
+        assert!(wakeup.arm_latest(15_000));
+        assert!(!wakeup.arm_latest(16_000));
+        assert!(!wakeup.arm_latest(14_000));
+        assert!(!wakeup.claim(15_000));
+        assert!(wakeup.claim(16_000));
+    }
+
+    #[test]
+    fn hook_refresh_waits_two_seconds_for_the_transcript_to_settle() {
+        assert_eq!(HOOK_SETTLE_DELAY_MS, 2_000);
     }
 
     #[test]
@@ -626,7 +994,8 @@ mod tests {
         .unwrap();
 
         state.set_monitoring_degraded_reason("Live hook listener unavailable: pipe is busy".into());
-        let snapshot = super::snapshot_for_state(&state).unwrap();
+        let snapshot =
+            super::snapshot_for_state_at(&state, chrono::Utc::now().timestamp_millis()).unwrap();
         assert_eq!(
             snapshot.monitoring.degraded_reason.as_deref(),
             Some("Live hook listener unavailable: pipe is busy")
@@ -650,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_for_home_exposes_the_latest_weekly_quota() {
+    fn transcript_quota_does_not_supply_the_official_snapshot() {
         let temp = tempfile::tempdir().unwrap();
         let sessions = temp.path().join("sessions/2026/07/17");
         std::fs::create_dir_all(&sessions).unwrap();
@@ -666,14 +1035,79 @@ mod tests {
 
         let snapshot = super::snapshot_for_home(temp.path(), 1_784_272_200_000).unwrap();
 
-        assert_eq!(snapshot.weekly_quota.as_ref().unwrap().used_percent, 81);
-        assert_eq!(
-            snapshot.weekly_quota.as_ref().unwrap().remaining_percent,
-            19
-        );
-        assert_eq!(
-            snapshot.weekly_quota.as_ref().unwrap().resets_at_ms,
-            1_784_870_653_000
-        );
+        assert!(snapshot.weekly_quota.is_none());
+    }
+
+    fn state_with_quota(quota: WeeklyQuota) -> (tempfile::TempDir, AppState) {
+        let temp = tempfile::tempdir().unwrap();
+        let state = AppState::new(
+            temp.path().to_owned(),
+            ConfigStore::new(temp.path().join("config.json")),
+        )
+        .unwrap();
+        state.cached_snapshot.write().unwrap().weekly_quota = Some(quota);
+        (temp, state)
+    }
+
+    #[test]
+    fn fresh_unexpired_official_quota_is_visible() {
+        let now_ms = 1_000_000;
+        let (_temp, state) = state_with_quota(WeeklyQuota {
+            used_percent: 5,
+            remaining_percent: 95,
+            resets_at_ms: now_ms + 60_000,
+            observed_at_ms: now_ms - 1_000,
+        });
+
+        let snapshot = super::snapshot_for_state_at(&state, now_ms).unwrap();
+
+        assert_eq!(snapshot.weekly_quota.unwrap().remaining_percent, 95);
+    }
+
+    #[test]
+    fn official_quota_older_than_five_minutes_is_hidden() {
+        let now_ms = 1_000_000;
+        let (_temp, state) = state_with_quota(WeeklyQuota {
+            used_percent: 5,
+            remaining_percent: 95,
+            resets_at_ms: now_ms + 60_000,
+            observed_at_ms: now_ms - 300_001,
+        });
+
+        let snapshot = super::snapshot_for_state_at(&state, now_ms).unwrap();
+
+        assert!(snapshot.weekly_quota.is_none());
+    }
+
+    #[test]
+    fn official_quota_at_its_reset_time_is_hidden() {
+        let now_ms = 1_000_000;
+        let (_temp, state) = state_with_quota(WeeklyQuota {
+            used_percent: 5,
+            remaining_percent: 95,
+            resets_at_ms: now_ms,
+            observed_at_ms: now_ms - 1_000,
+        });
+
+        let snapshot = super::snapshot_for_state_at(&state, now_ms).unwrap();
+
+        assert!(snapshot.weekly_quota.is_none());
+    }
+
+    #[test]
+    fn replacing_scanned_sessions_does_not_overwrite_official_quota() {
+        let now_ms = 1_000_000;
+        let (_temp, state) = state_with_quota(WeeklyQuota {
+            used_percent: 5,
+            remaining_percent: 95,
+            resets_at_ms: now_ms + 60_000,
+            observed_at_ms: now_ms - 1_000,
+        });
+
+        super::replace_cached_sessions(&state, vec![session(None)]);
+        let snapshot = super::snapshot_for_state_at(&state, now_ms).unwrap();
+
+        assert_eq!(snapshot.sessions.len(), 1);
+        assert_eq!(snapshot.weekly_quota.unwrap().remaining_percent, 95);
     }
 }

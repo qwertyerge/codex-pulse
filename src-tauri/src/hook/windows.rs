@@ -40,7 +40,7 @@ pub fn start_listener(app: AppHandle) -> anyhow::Result<()> {
         let app_for_refresh = app.clone();
         run_listener_loop(
             &mut listener,
-            move || crate::commands::schedule_refresh(app_for_refresh.clone()),
+            move || crate::commands::schedule_hook_refresh(app_for_refresh.clone()),
             move |error| report_listener_failure(&app, error),
         )
         .await;

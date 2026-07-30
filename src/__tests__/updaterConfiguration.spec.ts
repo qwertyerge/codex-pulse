@@ -1,9 +1,17 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+const APPROVED_UPDATER_PUBLIC_KEY_SHA256 =
+  "f914cff2593981637258bdfa0c35e64f8f7837d65dd4035b7393e4378a47db99";
+
 function read(path: string) {
   return readFileSync(resolve(process.cwd(), path), "utf8");
+}
+
+function sha256(value: string) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function packageVersionFromCargoToml(contents: string) {
@@ -63,10 +71,20 @@ describe("automatic updater configuration", () => {
       "https://github.com/qwertyerge/codex-pulse/releases/latest/download/latest.json"
     ]);
     expect(updater?.windows).toEqual({ installMode: "passive" });
-    expect(updater?.pubkey).toMatch(/^[A-Za-z0-9+/=]{100,}$/);
+    expect(sha256(updater?.pubkey ?? "")).toBe(
+      APPROVED_UPDATER_PUBLIC_KEY_SHA256
+    );
   });
 
-  it("keeps the bootstrap release version aligned", () => {
+  it("rejects a different valid-looking updater identity", () => {
+    const differentIdentity = "A".repeat(120);
+
+    expect(sha256(differentIdentity)).not.toBe(
+      APPROVED_UPDATER_PUBLIC_KEY_SHA256
+    );
+  });
+
+  it("keeps the 0.4.1 release version aligned", () => {
     const packageJson = JSON.parse(read("package.json")) as { version: string };
     const tauri = JSON.parse(read("src-tauri/tauri.conf.json")) as {
       version: string;
@@ -78,10 +96,10 @@ describe("automatic updater configuration", () => {
       cargoLock: codexPulseVersionFromCargoLock(read("src-tauri/Cargo.lock")),
       tauri: tauri.version
     }).toEqual({
-      packageJson: "0.4.0",
-      cargoToml: "0.4.0",
-      cargoLock: "0.4.0",
-      tauri: "0.4.0"
+      packageJson: "0.4.1",
+      cargoToml: "0.4.1",
+      cargoLock: "0.4.1",
+      tauri: "0.4.1"
     });
   });
 

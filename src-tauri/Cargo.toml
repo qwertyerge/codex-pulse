@@ -1,6 +1,6 @@
 [package]
 name = "codex-pulse"
-version = "0.4.0"
+version = "0.4.1"
 description = "A local desktop monitor for active Codex sessions"
 license = "Apache-2.0"
 repository = "https://github.com/qwertyerge/codex-pulse"
@@ -38,6 +38,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-uti
 walkdir = "2"
 uuid = "1"
 url = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 base64 = "=0.22.1"

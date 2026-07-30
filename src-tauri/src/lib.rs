@@ -10,8 +10,11 @@ pub mod hook_config;
 pub mod initialization;
 pub mod model;
 pub mod monitor;
+pub mod quota_monitor;
 pub mod registry;
 pub mod tray;
+#[cfg(target_os = "windows")]
+mod windows_window;
 
 #[cfg(test)]
 mod tests {
