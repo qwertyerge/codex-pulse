@@ -16,6 +16,7 @@ use crate::{
 
 const DEBOUNCE_DURATION: Duration = Duration::from_secs(5);
 const IDLE_TIMER_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
+const STABLE_CONNECTION_DURATION: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct QuotaRefreshHandle {
@@ -88,11 +89,14 @@ async fn run_monitor(
 
         match AppServerClient::connect(&candidates).await {
             Ok(mut client) => {
-                reconnect_attempt = 0;
+                let connected_at = Instant::now();
                 if run_connection(&mut client, &updates, &mut refresh_rx, config.debounce).await
                     == ConnectionEnd::Shutdown
                 {
                     return;
+                }
+                if connected_at.elapsed() >= STABLE_CONNECTION_DURATION {
+                    reconnect_attempt = 0;
                 }
             }
             Err(error) => {
@@ -199,36 +203,63 @@ mod tests {
         executable: PathBuf,
     }
 
+    fn compile_process_fixture(source_name: &str, executable_name: &str) -> ProcessFixture {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory
+            .path()
+            .join(format!("{executable_name}{}", env::consts::EXE_SUFFIX));
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(source_name);
+        let rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
+        let output = Command::new(rustc)
+            .arg(source)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .expect("quota fixture compiler starts");
+        assert!(
+            output.status.success(),
+            "quota fixture compiles: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        ProcessFixture {
+            _directory: directory,
+            executable,
+        }
+    }
+
     fn process_fixture() -> &'static Path {
         static FIXTURE: OnceLock<ProcessFixture> = OnceLock::new();
 
         &FIXTURE
-            .get_or_init(|| {
-                let directory = tempfile::tempdir().unwrap();
-                let executable = directory
-                    .path()
-                    .join(format!("quota-monitor-fixture{}", env::consts::EXE_SUFFIX));
-                let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("tests/fixtures/codex_app_server.rs");
-                let rustc = env::var_os("RUSTC").unwrap_or_else(|| OsString::from("rustc"));
-                let output = Command::new(rustc)
-                    .arg(source)
-                    .arg("-o")
-                    .arg(&executable)
-                    .output()
-                    .expect("quota fixture compiler starts");
-                assert!(
-                    output.status.success(),
-                    "quota fixture compiles: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
+            .get_or_init(|| compile_process_fixture("codex_app_server.rs", "quota-monitor-fixture"))
+            .executable
+    }
 
-                ProcessFixture {
-                    _directory: directory,
-                    executable,
-                }
+    fn exit_after_initialize_fixture() -> &'static Path {
+        static FIXTURE: OnceLock<ProcessFixture> = OnceLock::new();
+
+        &FIXTURE
+            .get_or_init(|| {
+                compile_process_fixture(
+                    "codex_app_server_exit_after_initialize.rs",
+                    "quota-monitor-exit-after-initialize-fixture",
+                )
             })
             .executable
+    }
+
+    fn read_start_times(path: &Path) -> Vec<u128> {
+        std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| {
+                line.parse()
+                    .expect("fixture start is a millisecond timestamp")
+            })
+            .collect()
     }
 
     fn test_config() -> MonitorConfig {
@@ -295,6 +326,48 @@ mod tests {
             "coalesced signals must not cause extra reads"
         );
         drop(handle);
+    }
+
+    #[tokio::test]
+    async fn handshake_then_exit_uses_escalating_capped_backoff() {
+        let fixture = exit_after_initialize_fixture().to_path_buf();
+        let starts_path = fixture.with_extension("starts");
+        let _ = std::fs::remove_file(&starts_path);
+        let (updates_tx, _updates_rx) = mpsc::unbounded_channel();
+        let handle = spawn_quota_monitor_with_config(
+            vec![fixture],
+            updates_tx,
+            MonitorConfig {
+                debounce: Duration::from_millis(30),
+                reconnect_delays: vec![
+                    Duration::from_millis(100),
+                    Duration::from_millis(300),
+                    Duration::from_millis(600),
+                ],
+            },
+        );
+
+        let starts = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let starts = read_start_times(&starts_path);
+                if starts.len() >= 5 {
+                    break starts;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("five reconnect attempts complete");
+        drop(handle);
+
+        let gaps: Vec<u128> = starts
+            .windows(2)
+            .map(|window| window[1] - window[0])
+            .collect();
+        assert!(
+            gaps[0] >= 80 && gaps[1] >= 250 && gaps[2] >= 550 && gaps[3] >= 550,
+            "expected escalating 100/300/600/600 ms backoff, observed {gaps:?}"
+        );
     }
 
     #[test]
