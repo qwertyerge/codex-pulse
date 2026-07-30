@@ -304,8 +304,16 @@ After secrets are requested, any of these conditions fails closed:
 - atomic evidence promotion fails; or
 - a saved terminal state cannot be restored.
 
-Failure returns non-zero, removes transient data, writes no successful public
-evidence, and leaves the readiness gate unchanged.
+Every failure returns non-zero, emits no success marker, and leaves the
+readiness gate unchanged. Cleanup attempts bounded deletion of the private
+directory and public staging. A private-directory deletion failure prevents
+final evidence promotion; all other failure paths likewise write no successful
+public evidence. If deletion itself fails, however, the bounded target may
+remain: private residue can contain the encrypted key copy and raw signer
+logs, while public staging contains only sanitized candidate evidence. The
+script reports only a stable, path-free cleanup target. Any residue requires
+local private remediation, and its path must not be copied into reports or
+review comments.
 
 The script never overwrites an existing evidence directory. Re-running a
 completed drill requires an explicit, separately reviewed evidence-retention
@@ -340,6 +348,10 @@ pseudo-terminal boundary where required. It covers:
   entry into the builtin after the harness observes the prompt;
 - the original terminal state is restored after hidden input succeeds or
   fails;
+- a semantic `read -s` wrapper can force hidden input to return non-zero, and
+  the script then returns non-zero, restores the exact terminal state, writes
+  no evidence, removes its private temporary directory, and emits no secret
+  canary;
 - the wrapper identifies hidden input from the `read -s` contract rather than a
   call ordinal, and each signal row asserts a `signal_injected=true` marker;
 - `HUP`, `INT`, and `TERM` during the prompt-to-read delay exit with their

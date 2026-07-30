@@ -27,12 +27,14 @@ interface HarnessOptions {
   delayedReadSetup?: boolean;
   exitSuccessfullyDuringHiddenRead?: boolean;
   existingEvidence?: boolean;
+  hiddenReadFails?: boolean;
   promotionFails?: boolean;
   signalDuringHiddenRead?: "HUP" | "INT" | "TERM";
   signatureMetadataInvalid?: boolean;
   signerFails?: boolean;
   verifierFails?: boolean;
   tamperedAccepted?: boolean;
+  ttyProbeFails?: boolean;
   ttyRestoreFails?: boolean;
 }
 
@@ -224,16 +226,23 @@ function createHarness(options: HarnessOptions = {}): Harness {
       "done",
       "printf 'child_environment_contains_response=%s\\n' \\",
       '  "$child_environment_contains_response"',
-      'original_tty_state="$(stty -g < /dev/tty)"',
+      'original_tty_state="$(CODEX_TTY_PROBE=before stty -g < /dev/tty)"',
+      'original_tty_status="$?"',
       '/bin/bash "$driver_directory/scripts/verify-updater-signing-backup.sh"',
       'recovery_status="$?"',
-      'restored_tty_state="$(stty -g < /dev/tty)"',
-      'if [[ "$restored_tty_state" == "$original_tty_state" ]]; then',
+      'restored_tty_state="$(CODEX_TTY_PROBE=after stty -g < /dev/tty)"',
+      'restored_tty_status="$?"',
+      "tty_validation_status=0",
+      'if [[ "$original_tty_status" -eq 0 && "$restored_tty_status" -eq 0 && -n "$original_tty_state" && -n "$restored_tty_state" && "$restored_tty_state" == "$original_tty_state" ]]; then',
       "  printf 'tty_state_restored=true\\n'",
       "else",
       "  printf 'tty_state_restored=false\\n'",
+      "  tty_validation_status=1",
       "fi",
-      'exit "$recovery_status"',
+      'if [[ "$recovery_status" -ne 0 ]]; then',
+      '  exit "$recovery_status"',
+      "fi",
+      'exit "$tty_validation_status"',
     ].join("\n"),
   );
 
@@ -337,11 +346,15 @@ function createHarness(options: HarnessOptions = {}): Harness {
     );
   }
 
-  if (options.ttyRestoreFails) {
+  if (options.ttyProbeFails || options.ttyRestoreFails) {
     writeStub(
       fakeBin,
       "stty",
       [
+        'if [[ "${FAKE_STTY_PROBE_FAILS:-0}" = "1" && -n "${CODEX_TTY_PROBE:-}" ]]; then',
+        '  printf "tty_probe_failure_injected=%s\\n" "$CODEX_TTY_PROBE" >&2',
+        "  exit 50",
+        "fi",
         'if [[ "${FAKE_STTY_RESTORE_FAILS:-0}" = "1" && "$#" -eq 1 && "$1" != "-g" && "$1" != "-echo" ]]; then',
         '  printf "tty_restore_failure_injected=true\\n" >&2',
         "  exit 1",
@@ -448,6 +461,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const usesReadWrapper = Boolean(
     options.delayedReadSetup ||
       options.exitSuccessfullyDuringHiddenRead ||
+      options.hiddenReadFails ||
       options.signalDuringHiddenRead,
   );
   if (usesReadWrapper) {
@@ -485,6 +499,10 @@ function createHarness(options: HarnessOptions = {}): Harness {
         "    sleep 0.2",
         '    kill "-$FAKE_READ_SIGNAL" "$$"',
         "  fi",
+        '  if [[ "$saw_silent" -eq 1 && "${FAKE_READ_FAILS:-0}" = "1" ]]; then',
+        '    printf "hidden_read_failure_injected=true\\n"',
+        "    return 1",
+        "  fi",
         '  if [[ "$saw_silent" -eq 1 && "${FAKE_READ_EXIT_SUCCESS:-0}" = "1" ]]; then',
         '    printf "hidden_read_success_exit_injected=true\\n"',
         "    exit 0",
@@ -509,12 +527,14 @@ function createHarness(options: HarnessOptions = {}): Harness {
     FAKE_PUBLIC_SIGNATURE: fakePublicSignature,
     FAKE_READ_EXIT_SUCCESS:
       options.exitSuccessfullyDuringHiddenRead ? "1" : "0",
+    FAKE_READ_FAILS: options.hiddenReadFails ? "1" : "0",
     FAKE_READ_SIGNAL: options.signalDuringHiddenRead ?? "",
     FAKE_RM_FAILURE_TARGET: options.cleanupFailureTarget ?? "",
     FAKE_SIGNATURE_METADATA_INVALID:
       options.signatureMetadataInvalid ? "1" : "0",
     FAKE_SIGNER_FAILS: options.signerFails ? "1" : "0",
     FAKE_STTY_RESTORE_FAILS: options.ttyRestoreFails ? "1" : "0",
+    FAKE_STTY_PROBE_FAILS: options.ttyProbeFails ? "1" : "0",
     FAKE_TAMPERED_ACCEPTED: options.tamperedAccepted ? "1" : "0",
     FAKE_VERIFIER_FAILS: options.verifierFails ? "1" : "0",
     TAURI_SIGNING_PRIVATE_KEY: "inherited-key-must-be-removed",
@@ -685,6 +705,30 @@ describeOnPosix("updater signing backup recovery drill", { timeout: 15_000 }, ()
     const result = await harness.run();
 
     expect(result.status).toBe(0);
+    expectNoSecrets(result, harness);
+  });
+
+  it("fails the PTY harness when terminal-state probes fail", async () => {
+    const harness = createHarness({ ttyProbeFails: true });
+    const result = await harness.run();
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status).toBe(1);
+    expect(output).toContain("tty_probe_failure_injected=before");
+    expect(output).toContain("tty_probe_failure_injected=after");
+    expect(existsSync(harness.evidenceDirectory)).toBe(true);
+    expectNoSecrets(result, harness, false);
+  });
+
+  it("restores the terminal when hidden input returns non-zero", async () => {
+    const harness = createHarness({ hiddenReadFails: true });
+    const result = await harness.run();
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status).toBe(1);
+    expect(output).toContain("hidden_read_failure_injected=true");
+    expect(existsSync(harness.evidenceDirectory)).toBe(false);
+    expect(readdirSync(harness.privateTempDirectory)).toEqual([]);
     expectNoSecrets(result, harness);
   });
 

@@ -12,7 +12,8 @@
 
 - Work only in `/Users/loki/.codex/worktrees/007c/codex-pulse` on the existing `codex/release-0.4.0` branch and existing pull request #19.
 - Do not create another branch or pull request.
-- Do not merge pull request #19.
+- Squash merge pull request #19 only after exact-final-head CI, substantive
+  review, and an unresolved-thread count of zero; do not push `main` directly.
 - Do not create a `0.4.0` tag, Draft Release, published Release, updater manifest, or installation.
 - Do not read or mutate GitHub Secret values, the original developer-machine updater key, or the existing updater Keychain item.
 - Do not run a complete application or updater bundle build for this recovery gate.
@@ -28,6 +29,44 @@
 - Keep raw signer output inside the private temporary directory and delete it on every exit.
 - Run frontend and Rust validation serially; do not recreate the previously observed parallel test contention.
 - Treat local proof, exact-head CI, CodeRabbit review, PR merge, tag, Draft, installation, publication, and old-to-new updater acceptance as separate gates.
+
+---
+
+## Approved Premerge Amendment
+
+This amendment supersedes older implementation snippets or handoff steps below
+where they conflict with the reviewed recovery implementation and the
+maintainer's later authorization to squash merge pull request #19.
+
+- The PTY driver records both `stty -g` statuses, requires both captured states
+  to be non-empty and equal, emits `tty_state_restored=false` otherwise, and
+  returns non-zero when the recovery script itself succeeded but terminal
+  validation could not be completed.
+- `HarnessOptions` includes terminal-probe failure, terminal-restoration
+  failure, semantic hidden-read failure, semantic signal injection,
+  private/public cleanup failure, and promotion failure. The `BASH_ENV`
+  wrapper selects hidden input from the `read -s` argument rather than a call
+  ordinal.
+- A direct `hiddenReadFails` regression makes semantic hidden `read` return
+  non-zero and requires a non-zero script result, exact TTY restoration, no
+  evidence, an empty private temporary root, and no secret canary.
+- Private and public cleanup use separate path-fenced helpers. They propagate
+  `rm` failure and verify absence before clearing the tracked path. Private
+  cleanup must succeed before evidence promotion.
+- The explicit success path disarms the `EXIT` trap before invoking cleanup
+  directly, so cleanup runs exactly once. Success markers are emitted only
+  after that cleanup succeeds.
+- Cleanup attempts removal but cannot guarantee removal when deletion itself
+  fails. The bounded residue may remain; private residue can contain the
+  encrypted key copy and raw signer logs. The script emits only a stable,
+  path-free diagnostic, and any residue must be remediated locally and
+  privately without recording its path.
+- The immutable public recovery evidence remains byte-for-byte unchanged by
+  these TTY, cleanup, test, and documentation corrections.
+- After a final documentation-only head passes exact-head CI and substantive
+  review with zero unresolved threads, squash merge is authorized. Tag,
+  Release, installation, publication, updater execution, and secret mutation
+  remain outside this plan.
 
 ---
 
@@ -358,11 +397,19 @@ interface TextResult {
 }
 
 interface HarnessOptions {
+  cleanupFailureTarget?: "private-directory" | "public-staging";
+  delayedReadSetup?: boolean;
+  exitSuccessfullyDuringHiddenRead?: boolean;
   existingEvidence?: boolean;
+  hiddenReadFails?: boolean;
+  promotionFails?: boolean;
+  signalDuringHiddenRead?: "HUP" | "INT" | "TERM";
   signatureMetadataInvalid?: boolean;
   signerFails?: boolean;
   verifierFails?: boolean;
   tamperedAccepted?: boolean;
+  ttyProbeFails?: boolean;
+  ttyRestoreFails?: boolean;
 }
 
 interface Harness {
@@ -1179,8 +1226,19 @@ node -e '
   );
 '
 
+private_cleanup_status=0
+remove_private_directory || private_cleanup_status=$?
+if [[ "$private_cleanup_status" -ne 0 ]]; then
+  exit "$private_cleanup_status"
+fi
 mv "$public_staging" "$evidence_directory"
 public_staging=""
+trap - EXIT
+cleanup_status=0
+cleanup || cleanup_status=$?
+if [[ "$cleanup_status" -ne 0 ]]; then
+  exit "$cleanup_status"
+fi
 printf 'evidence=%s\n' "$evidence_relative"
 printf 'signature_verified=true\n'
 printf 'tampered_fixture_rejected=true\n'
@@ -1791,7 +1849,7 @@ node -e '
       ],
       [
         "The maintainer reports an offline signing backup exists, but independent restore/sign/verify evidence is still pending. Keep this PR open and unmerged. This PR does not create a tag, Draft Release, publication, installation, secret mutation, or old-to-new update claim.",
-        "The independent offline signing backup gate is verified by a TTY-only restore/sign/verify drill and replayable public evidence. Keep this PR open and unmerged. This PR does not create a tag, Draft Release, publication, installation, secret mutation, or old-to-new update claim.",
+        "The independent offline signing backup gate is verified by a TTY-only restore/sign/verify drill and replayable public evidence. Squash merge is authorized only after exact-final-head CI, substantive review, and unresolved-thread checks pass. This PR does not create a tag, Draft Release, publication, installation, secret mutation, or old-to-new update claim.",
       ],
     ];
     for (const [before, after] of replacements) {
@@ -1817,9 +1875,10 @@ gh pr view 19 \
   --json number,url,state,isDraft,headRefName,baseRefName,headRefOid,body
 ```
 
-Expected: PR #19 remains Ready/open, its human-owned summary and release
-boundary reflect verified backup evidence, and the CodeRabbit block remains
-present and unchanged.
+Expected: before the authorized merge, PR #19 remains Ready/open, its
+human-owned summary and release boundary reflect verified backup evidence and
+the final merge prerequisites, and the CodeRabbit block remains present and
+unchanged.
 
 - [ ] **Step 5: Select and watch only the recovery-evidence head CI run**
 
@@ -2047,7 +2106,34 @@ If `origin/main` advanced so it is no longer an ancestor, report the exact
 divergence through AskHuman. Do not rebase, force-push, merge, or rewrite the
 already open PR branch without fresh approval.
 
-- [ ] **Step 10: Handoff without broadening the release task**
+- [ ] **Step 10: Squash merge the reviewed head and verify exact `main`**
+
+Capture the reviewed head and require it to remain the pull request head:
+
+```bash
+reviewed_head="$(
+  gh pr view 19 \
+    --repo qwertyerge/codex-pulse \
+    --json headRefOid \
+    --jq .headRefOid
+)"
+test "$reviewed_head" = "$(git rev-parse HEAD)"
+gh pr merge 19 \
+  --repo qwertyerge/codex-pulse \
+  --squash \
+  --match-head-commit "$reviewed_head" \
+  --subject "chore: prepare 0.4.0 updater bootstrap" \
+  --body "Prepare the 0.4.0 updater bootstrap with verified recovery tooling, immutable public evidence, and guarded TTY secret input."
+git fetch origin main
+```
+
+Read the merge commit from pull request #19 and require it to equal
+`origin/main`. Select and watch only the CI run whose `headSha` equals that
+merge commit. Verify again that no `0.4.0` tag or Release exists. Do not delete
+the host-managed local worktree, create a tag, install an application, publish
+anything, run an updater, or mutate a GitHub Secret.
+
+- [ ] **Step 11: Handoff without broadening the release task**
 
 Use AskHuman `whats_next` only after every approved step is complete. Attach
 `docs/superpowers/reports/0.4.0-updater-bootstrap-readiness.md` and report:
@@ -2058,6 +2144,6 @@ Use AskHuman `whats_next` only after every approved step is complete. Attach
 - focused and full local verification counts;
 - exact final PR head and CI run;
 - fresh CodeRabbit conclusion or explicitly accepted limitation;
-- PR #19 remains Ready/open/unmerged; and
+- PR #19's squash merge commit, exact `origin/main`, and exact-main CI run; and
 - no secret value/path, tag, Draft, Release, installation, publication, or
   GitHub Secret mutation occurred.

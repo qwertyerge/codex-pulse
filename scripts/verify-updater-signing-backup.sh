@@ -468,12 +468,12 @@ if [[ "$private_cleanup_status" -ne 0 ]]; then
 fi
 mv "$public_staging" "$evidence_directory"
 public_staging=""
+trap - EXIT
 cleanup_status=0
 cleanup || cleanup_status=$?
 if [[ "$cleanup_status" -ne 0 ]]; then
   exit "$cleanup_status"
 fi
-trap - EXIT
 printf 'evidence=%s\n' "$evidence_relative"
 printf 'signature_verified=true\n'
 printf 'tampered_fixture_rejected=true\n'
