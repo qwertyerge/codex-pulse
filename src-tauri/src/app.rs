@@ -89,6 +89,15 @@ fn main_window_platform_policy(target_os: &str) -> MainWindowPlatformPolicy {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn maximize_width_constraint_warning<E: std::fmt::Display>(
+    result: Result<(), E>,
+) -> Option<String> {
+    result
+        .err()
+        .map(|error| format!("Codex Pulse maximize width constraint unavailable: {error}"))
+}
+
 fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
     use tauri_plugin_liquid_glass::{LiquidGlassConfig, LiquidGlassExt};
@@ -113,7 +122,11 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .build()?;
 
     #[cfg(target_os = "windows")]
-    crate::windows_window::install_maximize_width_constraint(&window)?;
+    if let Some(warning) = maximize_width_constraint_warning(
+        crate::windows_window::install_maximize_width_constraint(&window),
+    ) {
+        eprintln!("{warning}");
+    }
 
     if platform_policy.maximize_on_create {
         let _ = window.maximize();
@@ -141,7 +154,10 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
 mod tests {
     use tauri::{LogicalUnit, PixelUnit};
 
-    use super::{main_window_platform_policy, main_window_size_constraints};
+    use super::{
+        main_window_platform_policy, main_window_size_constraints,
+        maximize_width_constraint_warning,
+    };
 
     #[test]
     fn main_window_uses_pd_measured_bounds() {
@@ -168,6 +184,19 @@ mod tests {
 
         assert!(policy.maximizable);
         assert!(!policy.maximize_on_create);
+    }
+
+    #[test]
+    fn maximize_width_constraint_failure_is_nonfatal() {
+        assert_eq!(
+            maximize_width_constraint_warning::<&str>(Err("subclass failed")).as_deref(),
+            Some("Codex Pulse maximize width constraint unavailable: subclass failed")
+        );
+    }
+
+    #[test]
+    fn successful_maximize_width_constraint_has_no_warning() {
+        assert_eq!(maximize_width_constraint_warning::<&str>(Ok(())), None);
     }
 
     #[test]
