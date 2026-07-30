@@ -117,8 +117,11 @@ restore_tty() {
 }
 
 cleanup() {
+  local cleanup_status=0
+
   if ! restore_tty; then
     printf 'recovery_cleanup_failed=tty\n' >&2
+    cleanup_status=1
   fi
   unset saved_tty_state
   unset restored_key_path
@@ -154,8 +157,22 @@ cleanup() {
         ;;
     esac
   fi
+
+  return "$cleanup_status"
 }
-trap cleanup EXIT
+
+on_exit() {
+  local original_status=$?
+  local cleanup_status=0
+
+  trap - EXIT
+  cleanup || cleanup_status=$?
+  if [[ "$original_status" -ne 0 ]]; then
+    exit "$original_status"
+  fi
+  exit "$cleanup_status"
+}
+trap on_exit EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -402,6 +419,12 @@ node -e '
 
 mv "$public_staging" "$evidence_directory"
 public_staging=""
+cleanup_status=0
+cleanup || cleanup_status=$?
+if [[ "$cleanup_status" -ne 0 ]]; then
+  exit "$cleanup_status"
+fi
+trap - EXIT
 printf 'evidence=%s\n' "$evidence_relative"
 printf 'signature_verified=true\n'
 printf 'tampered_fixture_rejected=true\n'

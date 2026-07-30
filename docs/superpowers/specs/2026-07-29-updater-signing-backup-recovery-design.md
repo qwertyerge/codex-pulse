@@ -261,9 +261,12 @@ An exit trap first restores any saved terminal state, then unsets
 secret-bearing shell variables and deletes the exact temporary directory
 created by this run. Explicit `HUP`, `INT`, and `TERM` traps exit with status
 `129`, `130`, and `143`, respectively, so each catchable signal passes through
-the `EXIT` cleanup. This restoration path covers read failure and those
-catchable terminations; an uncatchable process or host failure remains outside
-the script's guarantees.
+the `EXIT` cleanup. The exit handler preserves an existing non-zero status, but
+if cleanup is entered from a successful path and terminal restoration fails, it
+overrides that success with status `1`. Success markers are emitted only after
+an explicit successful cleanup. This restoration path covers read failure and
+those catchable terminations; an uncatchable process or host failure remains
+outside the script's guarantees.
 
 ## Preconditions and Fail-Closed Behavior
 
@@ -287,8 +290,9 @@ After secrets are requested, any of these conditions fails closed:
   extra non-empty line;
 - verification against the committed public key fails;
 - the tampered fixture is incorrectly accepted;
-- an evidence hash cannot be computed; or
-- atomic evidence promotion fails.
+- an evidence hash cannot be computed;
+- atomic evidence promotion fails; or
+- a saved terminal state cannot be restored.
 
 Failure returns non-zero, removes transient data, writes no successful public
 evidence, and leaves the readiness gate unchanged.
@@ -326,9 +330,13 @@ pseudo-terminal boundary where required. It covers:
   entry into the builtin after the harness observes the prompt;
 - the original terminal state is restored after hidden input succeeds or
   fails;
+- the wrapper identifies hidden input from the `read -s` contract rather than a
+  call ordinal, and each signal row asserts a `signal_injected=true` marker;
 - `HUP`, `INT`, and `TERM` during the prompt-to-read delay exit with their
   standard `128 + signal` status, restore the original terminal state, remove
   transient data, and emit no secret canary;
+- an injected terminal-restoration failure overrides an otherwise successful
+  exit and emits no success marker;
 - outer and decoded signature documents contain only the exact approved
   comments and base64 signature bodies;
 - signing failure, verification failure, and unexpected negative-check

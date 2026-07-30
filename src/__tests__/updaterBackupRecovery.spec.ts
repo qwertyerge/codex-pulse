@@ -24,12 +24,14 @@ interface TextResult {
 
 interface HarnessOptions {
   delayedReadSetup?: boolean;
+  exitSuccessfullyDuringHiddenRead?: boolean;
   existingEvidence?: boolean;
   signalDuringHiddenRead?: "HUP" | "INT" | "TERM";
   signatureMetadataInvalid?: boolean;
   signerFails?: boolean;
   verifierFails?: boolean;
   tamperedAccepted?: boolean;
+  ttyRestoreFails?: boolean;
 }
 
 interface Harness {
@@ -297,6 +299,20 @@ function createHarness(options: HarnessOptions = {}): Harness {
   mkdirSync(auditDirectory);
   mkdirSync(privateTempDirectory);
 
+  if (options.ttyRestoreFails) {
+    writeStub(
+      fakeBin,
+      "stty",
+      [
+        'if [[ "${FAKE_STTY_RESTORE_FAILS:-0}" = "1" && "$#" -eq 1 && "$1" != "-g" && "$1" != "-echo" ]]; then',
+        '  printf "tty_restore_failure_injected=true\\n" >&2',
+        "  exit 1",
+        "fi",
+        'exec /bin/stty "$@"',
+      ].join("\n"),
+    );
+  }
+
   writeStub(fakeBin, "uname", 'printf "Darwin\\n"');
   writeStub(
     fakeBin,
@@ -391,22 +407,31 @@ function createHarness(options: HarnessOptions = {}): Harness {
   }
 
   const bashEnvironment = join(fixtureRoot, "delay-read-setup.sh");
-  if (options.delayedReadSetup || options.signalDuringHiddenRead) {
+  const usesReadWrapper = Boolean(
+    options.delayedReadSetup ||
+      options.exitSuccessfullyDuringHiddenRead ||
+      options.signalDuringHiddenRead,
+  );
+  if (usesReadWrapper) {
     writeFileSync(
       bashEnvironment,
       [
-        "read_call_count=0",
         "read() {",
         '  local prompt=""',
         "  local saw_prompt=0",
+        "  local saw_silent=0",
         "  local -a read_arguments=()",
-        "  read_call_count=$((read_call_count + 1))",
         '  while [[ "$#" -gt 0 ]]; do',
         '    case "$1" in',
         "      -p)",
         '        prompt="$2"',
         "        saw_prompt=1",
         "        shift 2",
+        "        ;;",
+        "      -s)",
+        "        saw_silent=1",
+        '        read_arguments[${#read_arguments[@]}]="$1"',
+        "        shift",
         "        ;;",
         "      *)",
         '        read_arguments[${#read_arguments[@]}]="$1"',
@@ -417,9 +442,14 @@ function createHarness(options: HarnessOptions = {}): Harness {
         '  if [[ "$saw_prompt" -eq 1 ]]; then',
         '    printf "%s" "$prompt" > /dev/tty',
         "  fi",
-        '  if [[ "$read_call_count" -eq 3 && -n "${FAKE_READ_SIGNAL:-}" ]]; then',
+        '  if [[ "$saw_silent" -eq 1 && -n "${FAKE_READ_SIGNAL:-}" ]]; then',
+        '    printf "signal_injected=true\\n"',
         "    sleep 0.2",
         '    kill "-$FAKE_READ_SIGNAL" "$$"',
+        "  fi",
+        '  if [[ "$saw_silent" -eq 1 && "${FAKE_READ_EXIT_SUCCESS:-0}" = "1" ]]; then',
+        '    printf "hidden_read_success_exit_injected=true\\n"',
+        "    exit 0",
         "  fi",
         "  sleep 0.2",
         '  builtin read "${read_arguments[@]}"',
@@ -432,18 +462,19 @@ function createHarness(options: HarnessOptions = {}): Harness {
 
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
-    ...(options.delayedReadSetup || options.signalDuringHiddenRead
-      ? { BASH_ENV: bashEnvironment }
-      : {}),
+    ...(usesReadWrapper ? { BASH_ENV: bashEnvironment } : {}),
     PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
     TMPDIR: `${privateTempDirectory}/`,
     FAKE_AUDIT_DIRECTORY: auditDirectory,
     FAKE_INVALID_PUBLIC_SIGNATURE: invalidPublicSignature,
     FAKE_PUBLIC_SIGNATURE: fakePublicSignature,
+    FAKE_READ_EXIT_SUCCESS:
+      options.exitSuccessfullyDuringHiddenRead ? "1" : "0",
     FAKE_READ_SIGNAL: options.signalDuringHiddenRead ?? "",
     FAKE_SIGNATURE_METADATA_INVALID:
       options.signatureMetadataInvalid ? "1" : "0",
     FAKE_SIGNER_FAILS: options.signerFails ? "1" : "0",
+    FAKE_STTY_RESTORE_FAILS: options.ttyRestoreFails ? "1" : "0",
     FAKE_TAMPERED_ACCEPTED: options.tamperedAccepted ? "1" : "0",
     FAKE_VERIFIER_FAILS: options.verifierFails ? "1" : "0",
     TAURI_SIGNING_PRIVATE_KEY: "inherited-key-must-be-removed",
@@ -475,7 +506,11 @@ function allEvidenceText(directory: string) {
     .join("\n");
 }
 
-function expectNoSecrets(result: TextResult, harness: Harness) {
+function expectNoSecrets(
+  result: TextResult,
+  harness: Harness,
+  ttyRestored = true,
+) {
   const observable = [
     result.stdout,
     result.stderr,
@@ -488,10 +523,10 @@ function expectNoSecrets(result: TextResult, harness: Harness) {
     readFileSync(harness.restoredKeyPath, "utf8").trim(),
   );
   expect(`${result.stdout}\n${result.stderr}`).toContain(
-    "tty_state_restored=true",
+    `tty_state_restored=${String(ttyRestored)}`,
   );
   expect(`${result.stdout}\n${result.stderr}`).not.toContain(
-    "tty_state_restored=false",
+    `tty_state_restored=${String(!ttyRestored)}`,
   );
   expect(`${result.stdout}\n${result.stderr}`).toContain(
     "child_environment_contains_response=false",
@@ -627,11 +662,33 @@ describeOnPosix("updater signing backup recovery drill", { timeout: 15_000 }, ()
       const result = await harness.run();
 
       expect(result.status).toBe(expectedStatus);
+      expect(`${result.stdout}\n${result.stderr}`).toContain(
+        "signal_injected=true",
+      );
       expect(existsSync(harness.evidenceDirectory)).toBe(false);
       expect(readdirSync(harness.privateTempDirectory)).toEqual([]);
       expectNoSecrets(result, harness);
     },
   );
+
+  it("fails closed when EXIT cleanup cannot restore the terminal", async () => {
+    const harness = createHarness({
+      delayedReadSetup: true,
+      exitSuccessfullyDuringHiddenRead: true,
+      ttyRestoreFails: true,
+    });
+    const result = await harness.run();
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status).toBe(1);
+    expect(output).toContain("hidden_read_success_exit_injected=true");
+    expect(output).toContain("tty_restore_failure_injected=true");
+    expect(output).toContain("recovery_cleanup_failed=tty");
+    expect(output).not.toContain("signature_verified=true");
+    expect(existsSync(harness.evidenceDirectory)).toBe(false);
+    expect(readdirSync(harness.privateTempDirectory)).toEqual([]);
+    expectNoSecrets(result, harness, false);
+  });
 
   it.each<[string, string[]]>([
     ["key-source attestation", ["no"]],

@@ -4,15 +4,17 @@
 
 **Goal:** Close Apple Bash 3.2's prompt-before-noecho race in the updater
 backup-recovery drill, restore the exact terminal state on every supported exit
-path, correct the readiness record, and merge PR #19 only after fresh
-exact-head verification.
+path, fail closed if that restoration cannot complete, correct the readiness
+record, and merge PR #19 only after fresh exact-head verification.
 
 **Architecture:** Keep the existing `/bin/bash` and `/dev/tty` boundary.
 `read_hidden` explicitly saves the terminal state and disables echo before the
 Bash builtin can emit its prompt; normal flow restores immediately, while
 `EXIT` cleanup and explicit catchable-signal traps cover premature termination.
-The PTY harness reproduces Apple's exact prompt/noecho ordering with canaries
-and verifies the terminal after the child script exits.
+The exit handler preserves existing failures and overrides an otherwise
+successful exit when cleanup fails. The PTY harness reproduces Apple's exact
+prompt/noecho ordering with canaries, identifies hidden reads by their `-s`
+contract, and verifies the terminal after the child script exits.
 
 **Tech Stack:** Apple Bash 3.2, POSIX TTY utilities, Vue/Vitest TypeScript test
 harness, GitHub CLI, GitHub Actions.
@@ -32,9 +34,10 @@ harness, GitHub CLI, GitHub Actions.
 ## File Map
 
 - Modify `src/__tests__/updaterBackupRecovery.spec.ts`: deterministic Apple
-  Bash race injection, PTY-state driver, signal cases, and canary assertions.
+  Bash race injection, semantic hidden-read matching, PTY-state driver, signal
+  and restoration-failure cases, and canary assertions.
 - Modify `scripts/verify-updater-signing-backup.sh`: explicit TTY state
-  lifecycle plus `HUP`/`INT`/`TERM` routing through cleanup.
+  lifecycle, fail-closed cleanup, and `HUP`/`INT`/`TERM` routing through cleanup.
 - Modify
   `docs/superpowers/reports/0.4.0-updater-bootstrap-readiness.md`: correct the
   version-only scope paragraph and the incomplete prompt-race timeline.
@@ -52,10 +55,11 @@ harness, GitHub CLI, GitHub Actions.
 **Interfaces:**
 - Consumes: the real copied recovery script and a real pseudo-terminal.
 - Produces: `signalDuringHiddenRead?: "HUP" | "INT" | "TERM"` in
-  `HarnessOptions`; each harness result contains
-  `tty_state_restored=true`; `delayedReadSetup` reproduces Apple's ordering;
-  the recovery describe block uses a 15-second Vitest timeout consistent with
-  its existing PTY watchdog and the repository's other external-process suite.
+  `HarnessOptions`; `signal_injected=true` proves semantic injection into
+  `read -s`; each ordinary harness result contains `tty_state_restored=true`;
+  `delayedReadSetup` reproduces Apple's ordering; the recovery describe block
+  uses a 15-second Vitest timeout consistent with its existing PTY watchdog and
+  the repository's other external-process suite.
 
 - [ ] **Step 1: Add a PTY driver that compares terminal state around the script**
 
@@ -98,27 +102,34 @@ expect(`${result.stdout}\n${result.stderr}`).not.toContain(
 Extend `HarnessOptions`:
 
 ```ts
+exitSuccessfullyDuringHiddenRead?: boolean;
 signalDuringHiddenRead?: "HUP" | "INT" | "TERM";
+ttyRestoreFails?: boolean;
 ```
 
-Generate `BASH_ENV` whenever `delayedReadSetup` or
-`signalDuringHiddenRead` is set. The exported wrapper must remove `-p`, emit
-that prompt itself, delay while echo is still in its current state, and only
-then enter the builtin:
+Generate `BASH_ENV` whenever `delayedReadSetup`,
+`exitSuccessfullyDuringHiddenRead`, or `signalDuringHiddenRead` is set. The
+exported wrapper must remove `-p`, emit that prompt itself, identify the hidden
+read from its `-s` option, delay while echo is still in its current state, and
+only then enter the builtin:
 
 ```bash
-read_call_count=0
 read() {
   local prompt=""
   local saw_prompt=0
+  local saw_silent=0
   local -a read_arguments=()
-  read_call_count=$((read_call_count + 1))
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
       -p)
         prompt="$2"
         saw_prompt=1
         shift 2
+        ;;
+      -s)
+        saw_silent=1
+        read_arguments[${#read_arguments[@]}]="$1"
+        shift
         ;;
       *)
         read_arguments[${#read_arguments[@]}]="$1"
@@ -129,9 +140,14 @@ read() {
   if [[ "$saw_prompt" -eq 1 ]]; then
     printf '%s' "$prompt" > /dev/tty
   fi
-  if [[ "$read_call_count" -eq 3 && -n "${FAKE_READ_SIGNAL:-}" ]]; then
+  if [[ "$saw_silent" -eq 1 && -n "${FAKE_READ_SIGNAL:-}" ]]; then
+    printf 'signal_injected=true\n'
     sleep 0.2
     kill "-$FAKE_READ_SIGNAL" "$$"
+  fi
+  if [[ "$saw_silent" -eq 1 && "${FAKE_READ_EXIT_SUCCESS:-0}" = "1" ]]; then
+    printf 'hidden_read_success_exit_injected=true\n'
+    exit 0
   fi
   sleep 0.2
   builtin read "${read_arguments[@]}"
@@ -139,7 +155,8 @@ read() {
 export -f read
 ```
 
-Set `FAKE_READ_SIGNAL` to the selected signal or an empty string. Keep the
+Set `FAKE_READ_SIGNAL` to the selected signal or an empty string, and use
+`FAKE_READ_EXIT_SUCCESS=1` only for the cleanup-failure regression. Keep the
 four response values only in the parent Expect environment, which already
 unsets each one before spawning the recovery child.
 
@@ -185,12 +202,21 @@ it.each([
     const result = await harness.run();
 
     expect(result.status).toBe(expectedStatus);
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      "signal_injected=true",
+    );
     expect(existsSync(harness.evidenceDirectory)).toBe(false);
     expect(readdirSync(harness.privateTempDirectory)).toEqual([]);
     expectNoSecrets(result, harness);
   },
 );
 ```
+
+Add a fail-closed regression that makes the semantic hidden-read wrapper exit
+successfully while a fake `stty` rejects restoration. It must expect status
+`1`, `recovery_cleanup_failed=tty`, no `signature_verified=true`, no evidence,
+and `tty_state_restored=false`. Before the production change, this test must
+fail with `expected 1, received 0`.
 
 - [ ] **Step 4: Run the focused race test and verify RED**
 
@@ -228,8 +254,8 @@ state; do not weaken the canary assertion.
 
 **Interfaces:**
 - Consumes: `/dev/tty` and `stty`.
-- Produces: `saved_tty_state`, `restore_tty`, silent hidden reads, and signal
-  exits `129`, `130`, and `143`.
+- Produces: `saved_tty_state`, `restore_tty`, fail-closed `on_exit`, silent
+  hidden reads, and signal exits `129`, `130`, and `143`.
 
 - [ ] **Step 1: Require `stty` and define the restorable state**
 
@@ -246,18 +272,45 @@ restore_tty() {
 
 The state string is never printed or promoted.
 
-- [ ] **Step 2: Put TTY restoration first in cleanup and route signals to EXIT**
+- [ ] **Step 2: Make cleanup fail closed and route signals to EXIT**
 
-At the beginning of `cleanup`, add:
+Track TTY restoration failure without skipping the remaining cleanup:
 
 ```bash
-if ! restore_tty; then
-  printf 'recovery_cleanup_failed=tty\n' >&2
-fi
-unset saved_tty_state
+cleanup() {
+  local cleanup_status=0
+
+  if ! restore_tty; then
+    printf 'recovery_cleanup_failed=tty\n' >&2
+    cleanup_status=1
+  fi
+  unset saved_tty_state
+
+  # Preserve the existing secret unsets and bounded directory removal.
+
+  return "$cleanup_status"
+}
 ```
 
-Immediately after `trap cleanup EXIT`, add:
+Replace the direct EXIT trap with a handler that preserves any existing
+non-zero status but overrides an otherwise successful exit when cleanup fails:
+
+```bash
+on_exit() {
+  local original_status=$?
+  local cleanup_status=0
+
+  trap - EXIT
+  cleanup || cleanup_status=$?
+  if [[ "$original_status" -ne 0 ]]; then
+    exit "$original_status"
+  fi
+  exit "$cleanup_status"
+}
+trap on_exit EXIT
+```
+
+Keep the signal routes immediately afterward:
 
 ```bash
 trap 'exit 129' HUP
@@ -266,7 +319,10 @@ trap 'exit 143' TERM
 ```
 
 These explicit exits are required because Apple Bash does not run an `EXIT`
-trap for an otherwise unhandled terminating signal.
+trap for an otherwise unhandled terminating signal. On the successful path,
+call `cleanup`, require status `0`, disarm the EXIT trap, and only then emit
+`evidence=...`, `signature_verified=true`, and
+`tampered_fixture_rejected=true`.
 
 - [ ] **Step 3: Implement guarded hidden input**
 
@@ -306,7 +362,9 @@ pnpm exec vitest run src/__tests__/updaterBackupRecovery.spec.ts
 ```
 
 Expected: Bash syntax passes; the recovery suite passes, including all three
-signal rows, `tty_state_restored=true`, and every no-secret assertion.
+semantic signal rows, `signal_injected=true`, ordinary
+`tty_state_restored=true`, the injected restoration failure returning `1`, and
+every no-secret assertion.
 
 - [ ] **Step 5: Commit the tested behavior**
 
