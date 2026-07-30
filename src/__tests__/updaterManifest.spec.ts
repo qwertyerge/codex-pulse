@@ -45,11 +45,13 @@ function validManifest(): ManifestFixture {
     pub_date: "2026-07-28T00:00:00Z",
     platforms: {
       "darwin-aarch64": {
-        url: "https://example.invalid/Codex.Pulse.app.tar.gz",
+        url:
+          "https://github.com/qwertyerge/codex-pulse/releases/download/0.4.0/Codex.Pulse.app.tar.gz",
         signature: "mac-signature"
       },
       "windows-x86_64": {
-        url: "https://example.invalid/Codex.Pulse-setup.exe",
+        url:
+          "https://github.com/qwertyerge/codex-pulse/releases/download/0.4.0/Codex.Pulse-setup.exe",
         signature: "windows-signature"
       }
     }
@@ -98,4 +100,30 @@ describe("updater manifest validator", () => {
       expect(result.stderr).toContain(`${platform}.${field} must be non-empty`);
     }
   );
+
+  it("rejects GitHub API asset URLs that consume anonymous API quota", () => {
+    const manifest = validManifest();
+    manifest.platforms["windows-x86_64"].url =
+      "https://api.github.com/repos/qwertyerge/codex-pulse/releases/assets/495045117";
+
+    const result = runManifest(manifest);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "windows-x86_64.url must use the public GitHub release download URL"
+    );
+  });
+
+  it("rejects a release download URL for a different tag", () => {
+    const manifest = validManifest();
+    manifest.platforms["windows-x86_64"].url =
+      "https://github.com/qwertyerge/codex-pulse/releases/download/0.4.1/Codex.Pulse-setup.exe";
+
+    const result = runManifest(manifest);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "windows-x86_64.url must use the public GitHub release download URL"
+    );
+  });
 });

@@ -120,4 +120,16 @@ describe("automatic updater configuration", () => {
     expect(capability.permissions).not.toContain("dialog:default");
     expect(capability.permissions).not.toContain("process:default");
   });
+
+  it("pins the release action before GitHub API asset URLs were introduced", () => {
+    const workflow = read(".github/workflows/release.yml");
+
+    expect(workflow).toContain(
+      "tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5"
+    );
+    expect(workflow).toContain("includeUpdaterJson: true");
+    expect(workflow).not.toContain("tauri-apps/tauri-action@v1");
+    expect(workflow).not.toContain("uploadUpdaterJson:");
+    expect(workflow).not.toContain("uploadUpdaterSignatures:");
+  });
 });

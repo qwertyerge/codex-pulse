@@ -350,7 +350,10 @@ describe("GitHub workflows", () => {
       ]),
     );
 
-    const build = stepUsing(release, "tauri-apps/tauri-action@v1");
+    const build = stepUsing(
+      release,
+      "tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5",
+    );
     expect(build.env).toEqual({
       GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}",
       APPLE_SIGNING_IDENTITY: "${{ matrix.apple-signing-identity }}",
@@ -366,8 +369,7 @@ describe("GitHub workflows", () => {
       generateReleaseNotes: true,
       releaseDraft: true,
       prerelease: false,
-      uploadUpdaterJson: true,
-      uploadUpdaterSignatures: true,
+      includeUpdaterJson: true,
       updaterJsonPreferNsis: true,
       args: "--target ${{ matrix.target }} --bundles ${{ matrix.bundles }}",
     });

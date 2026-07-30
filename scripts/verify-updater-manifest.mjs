@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 
 const [manifestPath, expectedVersion] = process.argv.slice(2);
 const requiredPlatforms = ["darwin-aarch64", "windows-x86_64"];
+const releaseDownloadPrefix =
+  `/qwertyerge/codex-pulse/releases/download/${encodeURIComponent(expectedVersion)}/`;
 
 function fail(message) {
   console.error(`Updater manifest invalid: ${message}`);
@@ -56,6 +58,24 @@ for (const platform of requiredPlatforms) {
     if (typeof entry[field] !== "string" || entry[field].trim() === "") {
       fail(`${platform}.${field} must be non-empty`);
     }
+  }
+
+  let downloadUrl;
+  try {
+    downloadUrl = new URL(entry.url);
+  } catch {
+    fail(`${platform}.url must use the public GitHub release download URL`);
+  }
+  if (
+    downloadUrl.origin !== "https://github.com" ||
+    downloadUrl.username !== "" ||
+    downloadUrl.password !== "" ||
+    !downloadUrl.pathname.startsWith(releaseDownloadPrefix) ||
+    downloadUrl.pathname === releaseDownloadPrefix ||
+    downloadUrl.search !== "" ||
+    downloadUrl.hash !== ""
+  ) {
+    fail(`${platform}.url must use the public GitHub release download URL`);
   }
 }
 
