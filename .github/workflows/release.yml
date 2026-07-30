@@ -65,7 +65,7 @@ jobs:
           - label: macOS ARM64
             platform: macos-15
             target: aarch64-apple-darwin
-            bundles: dmg
+            bundles: app,dmg
             apple-signing-identity: "-"
           - label: Windows x64
             platform: windows-latest

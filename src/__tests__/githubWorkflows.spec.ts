@@ -314,7 +314,7 @@ describe("GitHub workflows", () => {
             label: "macOS ARM64",
             platform: "macos-15",
             target: "aarch64-apple-darwin",
-            bundles: "dmg",
+            bundles: "app,dmg",
             "apple-signing-identity": "-",
           },
           {
