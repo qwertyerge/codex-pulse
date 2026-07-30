@@ -150,11 +150,30 @@ impl AppServerClient {
 
 pub fn default_codex_candidates() -> Vec<PathBuf> {
     let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
-    codex_candidates(local_app_data.as_deref())
+    codex_candidates(local_app_data.as_deref(), &default_macos_homebrew_roots())
 }
 
-fn codex_candidates(local_app_data: Option<&Path>) -> Vec<PathBuf> {
+#[cfg(target_os = "macos")]
+fn default_macos_homebrew_roots() -> Vec<PathBuf> {
+    vec![PathBuf::from("/opt/homebrew"), PathBuf::from("/usr/local")]
+}
+
+#[cfg(not(target_os = "macos"))]
+fn default_macos_homebrew_roots() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+fn codex_candidates(
+    local_app_data: Option<&Path>,
+    macos_homebrew_roots: &[PathBuf],
+) -> Vec<PathBuf> {
     let mut candidates = vec![PathBuf::from("codex")];
+    candidates.extend(
+        macos_homebrew_roots
+            .iter()
+            .map(|root| root.join("bin/codex"))
+            .filter(|executable| executable.is_file()),
+    );
     let Some(local_app_data) = local_app_data else {
         return candidates;
     };
@@ -257,11 +276,27 @@ mod tests {
         std::fs::write(older.join("codex.exe"), []).unwrap();
         std::fs::write(newer.join("codex.exe"), []).unwrap();
 
-        let candidates = codex_candidates(Some(local_app_data.path()));
+        let candidates = codex_candidates(Some(local_app_data.path()), &[]);
 
         assert_eq!(candidates.first(), Some(&PathBuf::from("codex")));
         assert!(candidates.contains(&older.join("codex.exe")));
         assert!(candidates.contains(&newer.join("codex.exe")));
+    }
+
+    #[test]
+    fn path_candidate_precedes_existing_macos_homebrew_binaries() {
+        let homebrew_root = tempfile::tempdir().unwrap();
+        let homebrew_codex = homebrew_root.path().join("bin/codex");
+        std::fs::create_dir_all(homebrew_codex.parent().unwrap()).unwrap();
+        std::fs::write(&homebrew_codex, []).unwrap();
+
+        let candidates = codex_candidates(None, &[homebrew_root.path().to_path_buf()]);
+
+        assert_eq!(
+            candidates,
+            vec![PathBuf::from("codex"), homebrew_codex],
+            "PATH remains first and existing macOS Homebrew candidates follow"
+        );
     }
 
     #[test]
