@@ -27,7 +27,13 @@ impl AppServerClient {
         for candidate in candidates {
             match Self::connect_candidate(candidate).await {
                 Ok(client) => return Ok(client),
-                Err(error) => failures.push(format!("{}: {error:#}", candidate.display())),
+                Err(error) => {
+                    let name = candidate
+                        .file_name()
+                        .unwrap_or(candidate.as_os_str())
+                        .to_string_lossy();
+                    failures.push(format!("{name}: {error:#}"));
+                }
             }
         }
 
@@ -51,7 +57,7 @@ impl AppServerClient {
 
         let mut child = command
             .spawn()
-            .with_context(|| format!("start {}", executable.display()))?;
+            .context("start Codex App Server candidate")?;
         let stdin = child.stdin.take().context("Codex App Server stdin")?;
         let stdout = child.stdout.take().context("Codex App Server stdout")?;
         let mut client = Self {
@@ -341,6 +347,27 @@ mod tests {
             .expect("response contains quota");
 
         assert_eq!(quota.remaining_percent, 95);
+    }
+
+    #[tokio::test]
+    async fn connection_errors_redact_candidate_parent_directories() {
+        let private_root = tempfile::tempdir().unwrap();
+        let candidate = private_root
+            .path()
+            .join("private-profile")
+            .join("codex-private-candidate");
+
+        let error = match AppServerClient::connect(&[candidate]).await {
+            Ok(_) => panic!("missing candidate must fail"),
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+
+        assert!(message.contains("codex-private-candidate"));
+        assert!(
+            !message.contains("private-profile"),
+            "candidate parent directory leaked in {message}"
+        );
     }
 
     #[tokio::test]
