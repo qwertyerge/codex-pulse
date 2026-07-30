@@ -116,6 +116,64 @@ restore_tty() {
   saved_tty_state=""
 }
 
+remove_private_directory() {
+  [[ -n "$private_directory" ]] || return 0
+  if [[ ! -e "$private_directory" && ! -L "$private_directory" ]]; then
+    private_directory=""
+    return 0
+  fi
+  case "$private_directory" in
+    "$temporary_root"/codex-pulse-backup-recovery.*)
+      if [[ ! -d "$private_directory" || -L "$private_directory" ]]; then
+        printf 'recovery_cleanup_refused=private-directory\n' >&2
+        return 1
+      fi
+      if ! rm -rf -- "$private_directory"; then
+        printf 'recovery_cleanup_failed=private-directory\n' >&2
+        return 1
+      fi
+      if [[ -e "$private_directory" || -L "$private_directory" ]]; then
+        printf 'recovery_cleanup_failed=private-directory\n' >&2
+        return 1
+      fi
+      private_directory=""
+      ;;
+    *)
+      printf 'recovery_cleanup_refused=private-directory\n' >&2
+      return 1
+      ;;
+  esac
+}
+
+remove_public_staging() {
+  [[ -n "$public_staging" ]] || return 0
+  if [[ ! -e "$public_staging" && ! -L "$public_staging" ]]; then
+    public_staging=""
+    return 0
+  fi
+  case "$public_staging" in
+    "$repository_root"/docs/superpowers/reports/.0.4.0-updater-backup-recovery.*)
+      if [[ ! -d "$public_staging" || -L "$public_staging" ]]; then
+        printf 'recovery_cleanup_refused=public-staging\n' >&2
+        return 1
+      fi
+      if ! rm -rf -- "$public_staging"; then
+        printf 'recovery_cleanup_failed=public-staging\n' >&2
+        return 1
+      fi
+      if [[ -e "$public_staging" || -L "$public_staging" ]]; then
+        printf 'recovery_cleanup_failed=public-staging\n' >&2
+        return 1
+      fi
+      public_staging=""
+      ;;
+    *)
+      printf 'recovery_cleanup_refused=public-staging\n' >&2
+      return 1
+      ;;
+  esac
+}
+
 cleanup() {
   local cleanup_status=0
 
@@ -136,26 +194,12 @@ cleanup() {
   unset TAURI_PRIVATE_KEY_PASSWORD
   unset TAURI_KEY_PASSWORD
 
-  if [[ -n "$private_directory" && -d "$private_directory" ]]; then
-    case "$private_directory" in
-      "$temporary_root"/codex-pulse-backup-recovery.*)
-        rm -rf -- "$private_directory"
-        ;;
-      *)
-        printf 'recovery_cleanup_refused=private-directory\n' >&2
-        ;;
-    esac
+  if ! remove_private_directory; then
+    cleanup_status=1
   fi
 
-  if [[ -n "$public_staging" && -d "$public_staging" ]]; then
-    case "$public_staging" in
-      "$repository_root"/docs/superpowers/reports/.0.4.0-updater-backup-recovery.*)
-        rm -rf -- "$public_staging"
-        ;;
-      *)
-        printf 'recovery_cleanup_refused=public-staging\n' >&2
-        ;;
-    esac
+  if ! remove_public_staging; then
+    cleanup_status=1
   fi
 
   return "$cleanup_status"
@@ -417,6 +461,11 @@ node -e '
   );
 '
 
+private_cleanup_status=0
+remove_private_directory || private_cleanup_status=$?
+if [[ "$private_cleanup_status" -ne 0 ]]; then
+  exit "$private_cleanup_status"
+fi
 mv "$public_staging" "$evidence_directory"
 public_staging=""
 cleanup_status=0

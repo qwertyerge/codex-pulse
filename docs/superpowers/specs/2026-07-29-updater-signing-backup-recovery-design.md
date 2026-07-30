@@ -268,6 +268,14 @@ an explicit successful cleanup. This restoration path covers read failure and
 those catchable terminations; an uncatchable process or host failure remains
 outside the script's guarantees.
 
+Private-directory and public-staging deletion use separate path-fenced helpers
+that reject non-directory or symbolic-link substitutions, propagate `rm`
+failure, and verify absence before clearing the tracked path. The private
+directory, including the copied encrypted key and raw signer logs, must be
+successfully removed before public evidence is promoted. On an aborted run,
+public staging deletion failure also contributes a non-zero cleanup result
+without replacing an already non-zero originating status.
+
 ## Preconditions and Fail-Closed Behavior
 
 The script fails before requesting secrets unless:
@@ -291,6 +299,8 @@ After secrets are requested, any of these conditions fails closed:
 - verification against the committed public key fails;
 - the tampered fixture is incorrectly accepted;
 - an evidence hash cannot be computed;
+- the private temporary directory cannot be removed before promotion;
+- aborted public staging cannot be removed;
 - atomic evidence promotion fails; or
 - a saved terminal state cannot be restored.
 
@@ -337,6 +347,10 @@ pseudo-terminal boundary where required. It covers:
   transient data, and emit no secret canary;
 - an injected terminal-restoration failure overrides an otherwise successful
   exit and emits no success marker;
+- an injected private-directory deletion failure returns non-zero, leaves the
+  evidence destination absent, and emits no success marker;
+- an injected public-staging deletion failure produces a stable cleanup
+  diagnostic without masking the original promotion error;
 - outer and decoded signature documents contain only the exact approved
   comments and base64 signature bodies;
 - signing failure, verification failure, and unexpected negative-check

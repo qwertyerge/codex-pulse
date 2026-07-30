@@ -4,15 +4,18 @@
 
 **Goal:** Close Apple Bash 3.2's prompt-before-noecho race in the updater
 backup-recovery drill, restore the exact terminal state on every supported exit
-path, fail closed if that restoration cannot complete, correct the readiness
-record, and merge PR #19 only after fresh exact-head verification.
+path, fail closed if TTY or bounded-directory cleanup cannot complete, correct
+the readiness record, and merge PR #19 only after fresh exact-head
+verification.
 
 **Architecture:** Keep the existing `/bin/bash` and `/dev/tty` boundary.
 `read_hidden` explicitly saves the terminal state and disables echo before the
 Bash builtin can emit its prompt; normal flow restores immediately, while
 `EXIT` cleanup and explicit catchable-signal traps cover premature termination.
 The exit handler preserves existing failures and overrides an otherwise
-successful exit when cleanup fails. The PTY harness reproduces Apple's exact
+successful exit when cleanup fails. Private data is deleted and its absence
+verified before evidence promotion; aborted public staging uses the same
+path-fenced failure accounting. The PTY harness reproduces Apple's exact
 prompt/noecho ordering with canaries, identifies hidden reads by their `-s`
 contract, and verifies the terminal after the child script exits.
 
@@ -35,9 +38,10 @@ harness, GitHub CLI, GitHub Actions.
 
 - Modify `src/__tests__/updaterBackupRecovery.spec.ts`: deterministic Apple
   Bash race injection, semantic hidden-read matching, PTY-state driver, signal
-  and restoration-failure cases, and canary assertions.
+  and cleanup-failure cases, and canary assertions.
 - Modify `scripts/verify-updater-signing-backup.sh`: explicit TTY state
-  lifecycle, fail-closed cleanup, and `HUP`/`INT`/`TERM` routing through cleanup.
+  lifecycle, path-fenced fail-closed cleanup before promotion, and
+  `HUP`/`INT`/`TERM` routing through cleanup.
 - Modify
   `docs/superpowers/reports/0.4.0-updater-bootstrap-readiness.md`: correct the
   version-only scope paragraph and the incomplete prompt-race timeline.
@@ -54,12 +58,13 @@ harness, GitHub CLI, GitHub Actions.
 
 **Interfaces:**
 - Consumes: the real copied recovery script and a real pseudo-terminal.
-- Produces: `signalDuringHiddenRead?: "HUP" | "INT" | "TERM"` in
-  `HarnessOptions`; `signal_injected=true` proves semantic injection into
-  `read -s`; each ordinary harness result contains `tty_state_restored=true`;
-  `delayedReadSetup` reproduces Apple's ordering; the recovery describe block
-  uses a 15-second Vitest timeout consistent with its existing PTY watchdog and
-  the repository's other external-process suite.
+- Produces: semantic signal, TTY restoration, private cleanup, public staging
+  cleanup, and promotion-failure controls in `HarnessOptions`;
+  `signal_injected=true` proves injection into `read -s`; each ordinary harness
+  result contains `tty_state_restored=true`; `delayedReadSetup` reproduces
+  Apple's ordering; the recovery describe block uses a 15-second Vitest timeout
+  consistent with its existing PTY watchdog and the repository's other
+  external-process suite.
 
 - [ ] **Step 1: Add a PTY driver that compares terminal state around the script**
 
@@ -102,7 +107,9 @@ expect(`${result.stdout}\n${result.stderr}`).not.toContain(
 Extend `HarnessOptions`:
 
 ```ts
+cleanupFailureTarget?: "private-directory" | "public-staging";
 exitSuccessfullyDuringHiddenRead?: boolean;
+promotionFails?: boolean;
 signalDuringHiddenRead?: "HUP" | "INT" | "TERM";
 ttyRestoreFails?: boolean;
 ```
@@ -218,6 +225,16 @@ successfully while a fake `stty` rejects restoration. It must expect status
 and `tty_state_restored=false`. Before the production change, this test must
 fail with `expected 1, received 0`.
 
+Add two bounded-directory failure regressions:
+
+1. A fake `rm` rejects the private temporary directory during an otherwise
+   successful run. Expect status `1`,
+   `recovery_cleanup_failed=private-directory`, no evidence destination, and no
+   success marker. Before the production change, this fails with `received 0`.
+2. A fake `mv` first rejects evidence promotion, then fake `rm` rejects public
+   staging cleanup. Preserve the original promotion status, emit
+   `recovery_cleanup_failed=public-staging`, and do not emit a success marker.
+
 - [ ] **Step 4: Run the focused race test and verify RED**
 
 Run:
@@ -254,8 +271,9 @@ state; do not weaken the canary assertion.
 
 **Interfaces:**
 - Consumes: `/dev/tty` and `stty`.
-- Produces: `saved_tty_state`, `restore_tty`, fail-closed `on_exit`, silent
-  hidden reads, and signal exits `129`, `130`, and `143`.
+- Produces: `saved_tty_state`, `restore_tty`,
+  `remove_private_directory`, `remove_public_staging`, fail-closed `on_exit`,
+  silent hidden reads, and signal exits `129`, `130`, and `143`.
 
 - [ ] **Step 1: Require `stty` and define the restorable state**
 
@@ -309,6 +327,20 @@ on_exit() {
 }
 trap on_exit EXIT
 ```
+
+Replace the inline directory-removal cases with
+`remove_private_directory` and `remove_public_staging`. Each helper must:
+
+- accept only its exact generated path prefix;
+- reject a non-directory or symbolic-link substitution;
+- treat non-zero `rm -rf` as failure;
+- verify that neither the path nor a symbolic link remains; and
+- clear its tracked path only after successful absence verification.
+
+`cleanup` must call both helpers and set `cleanup_status=1` if either fails.
+Before the final `mv "$public_staging" "$evidence_directory"`, call
+`remove_private_directory` separately and require status `0`; this prevents
+evidence promotion while the copied key or raw signer logs remain.
 
 Keep the signal routes immediately afterward:
 
@@ -364,7 +396,8 @@ pnpm exec vitest run src/__tests__/updaterBackupRecovery.spec.ts
 Expected: Bash syntax passes; the recovery suite passes, including all three
 semantic signal rows, `signal_injected=true`, ordinary
 `tty_state_restored=true`, the injected restoration failure returning `1`, and
-every no-secret assertion.
+the injected private/staging deletion failures producing the specified
+fail-closed results, plus every no-secret assertion.
 
 - [ ] **Step 5: Commit the tested behavior**
 

@@ -23,9 +23,11 @@ interface TextResult {
 }
 
 interface HarnessOptions {
+  cleanupFailureTarget?: "private-directory" | "public-staging";
   delayedReadSetup?: boolean;
   exitSuccessfullyDuringHiddenRead?: boolean;
   existingEvidence?: boolean;
+  promotionFails?: boolean;
   signalDuringHiddenRead?: "HUP" | "INT" | "TERM";
   signatureMetadataInvalid?: boolean;
   signerFails?: boolean;
@@ -299,6 +301,42 @@ function createHarness(options: HarnessOptions = {}): Harness {
   mkdirSync(auditDirectory);
   mkdirSync(privateTempDirectory);
 
+  if (options.cleanupFailureTarget) {
+    writeStub(
+      fakeBin,
+      "rm",
+      [
+        'target=""',
+        'for argument in "$@"; do target="$argument"; done',
+        'case "${FAKE_RM_FAILURE_TARGET:-}:$target" in',
+        "  private-directory:*/codex-pulse-backup-recovery.*)",
+        '    printf "private_cleanup_failure_injected=true\\n" >&2',
+        "    exit 47",
+        "    ;;",
+        "  public-staging:*/.0.4.0-updater-backup-recovery.*)",
+        '    printf "public_staging_cleanup_failure_injected=true\\n" >&2',
+        "    exit 48",
+        "    ;;",
+        "esac",
+        'exec /bin/rm "$@"',
+      ].join("\n"),
+    );
+  }
+
+  if (options.promotionFails) {
+    writeStub(
+      fakeBin,
+      "mv",
+      [
+        'if [[ "${FAKE_PROMOTION_FAILS:-0}" = "1" ]]; then',
+        '  printf "evidence_promotion_failure_injected=true\\n" >&2',
+        "  exit 49",
+        "fi",
+        'exec /bin/mv "$@"',
+      ].join("\n"),
+    );
+  }
+
   if (options.ttyRestoreFails) {
     writeStub(
       fakeBin,
@@ -467,10 +505,12 @@ function createHarness(options: HarnessOptions = {}): Harness {
     TMPDIR: `${privateTempDirectory}/`,
     FAKE_AUDIT_DIRECTORY: auditDirectory,
     FAKE_INVALID_PUBLIC_SIGNATURE: invalidPublicSignature,
+    FAKE_PROMOTION_FAILS: options.promotionFails ? "1" : "0",
     FAKE_PUBLIC_SIGNATURE: fakePublicSignature,
     FAKE_READ_EXIT_SUCCESS:
       options.exitSuccessfullyDuringHiddenRead ? "1" : "0",
     FAKE_READ_SIGNAL: options.signalDuringHiddenRead ?? "",
+    FAKE_RM_FAILURE_TARGET: options.cleanupFailureTarget ?? "",
     FAKE_SIGNATURE_METADATA_INVALID:
       options.signatureMetadataInvalid ? "1" : "0",
     FAKE_SIGNER_FAILS: options.signerFails ? "1" : "0",
@@ -688,6 +728,49 @@ describeOnPosix("updater signing backup recovery drill", { timeout: 15_000 }, ()
     expect(existsSync(harness.evidenceDirectory)).toBe(false);
     expect(readdirSync(harness.privateTempDirectory)).toEqual([]);
     expectNoSecrets(result, harness, false);
+  });
+
+  it("does not promote evidence when private cleanup fails", async () => {
+    const harness = createHarness({
+      cleanupFailureTarget: "private-directory",
+    });
+    const result = await harness.run();
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status).toBe(1);
+    expect(output).toContain("private_cleanup_failure_injected=true");
+    expect(output).toContain("recovery_cleanup_failed=private-directory");
+    expect(output).not.toContain("signature_verified=true");
+    expect(existsSync(harness.evidenceDirectory)).toBe(false);
+    expect(
+      readdirSync(harness.privateTempDirectory).some((name) =>
+        name.startsWith("codex-pulse-backup-recovery."),
+      ),
+    ).toBe(true);
+    expectNoSecrets(result, harness);
+  });
+
+  it("reports public staging cleanup failure without masking the original error", async () => {
+    const harness = createHarness({
+      cleanupFailureTarget: "public-staging",
+      promotionFails: true,
+    });
+    const result = await harness.run();
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status).toBe(49);
+    expect(output).toContain("evidence_promotion_failure_injected=true");
+    expect(output).toContain("public_staging_cleanup_failure_injected=true");
+    expect(output).toContain("recovery_cleanup_failed=public-staging");
+    expect(output).not.toContain("signature_verified=true");
+    expect(existsSync(harness.evidenceDirectory)).toBe(false);
+    expect(readdirSync(harness.privateTempDirectory)).toEqual([]);
+    expect(
+      readdirSync(dirname(harness.evidenceDirectory)).some((name) =>
+        name.startsWith(".0.4.0-updater-backup-recovery."),
+      ),
+    ).toBe(true);
+    expectNoSecrets(result, harness);
   });
 
   it.each<[string, string[]]>([
