@@ -84,7 +84,7 @@ describe("automatic updater configuration", () => {
     );
   });
 
-  it("keeps the 0.4.1 release version aligned", () => {
+  it("keeps the 0.4.2 release version aligned", () => {
     const packageJson = JSON.parse(read("package.json")) as { version: string };
     const tauri = JSON.parse(read("src-tauri/tauri.conf.json")) as {
       version: string;
@@ -96,10 +96,10 @@ describe("automatic updater configuration", () => {
       cargoLock: codexPulseVersionFromCargoLock(read("src-tauri/Cargo.lock")),
       tauri: tauri.version
     }).toEqual({
-      packageJson: "0.4.1",
-      cargoToml: "0.4.1",
-      cargoLock: "0.4.1",
-      tauri: "0.4.1"
+      packageJson: "0.4.2",
+      cargoToml: "0.4.2",
+      cargoLock: "0.4.2",
+      tauri: "0.4.2"
     });
   });
 
@@ -119,5 +119,17 @@ describe("automatic updater configuration", () => {
     expect(capability.permissions).not.toContain("updater:default");
     expect(capability.permissions).not.toContain("dialog:default");
     expect(capability.permissions).not.toContain("process:default");
+  });
+
+  it("pins the release action before GitHub API asset URLs were introduced", () => {
+    const workflow = read(".github/workflows/release.yml");
+
+    expect(workflow).toContain(
+      "tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5"
+    );
+    expect(workflow).toContain("includeUpdaterJson: true");
+    expect(workflow).not.toContain("tauri-apps/tauri-action@v1");
+    expect(workflow).not.toContain("uploadUpdaterJson:");
+    expect(workflow).not.toContain("uploadUpdaterSignatures:");
   });
 });
