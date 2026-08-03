@@ -159,6 +159,7 @@ fn parse_event(payload: &Value, occurred_at_ms: i64) -> Result<ParsedRecord> {
     let kind = match kind {
         "task_started" => LifecycleEventKind::TurnStart,
         "task_complete" => LifecycleEventKind::TurnEnd,
+        "turn_aborted" => LifecycleEventKind::Abort,
         _ => return Ok(ParsedRecord::Ignored),
     };
 
@@ -282,6 +283,19 @@ mod tests {
         assert_eq!(started.kind, LifecycleEventKind::TurnStart);
         assert_eq!(started.turn_id.as_deref(), Some("turn-root"));
         assert_eq!(started.occurred_at_ms, 1_784_185_260_000);
+    }
+
+    #[test]
+    fn parses_turn_aborted_as_an_abort_lifecycle_event() {
+        let event = r#"{"timestamp":"2026-07-16T07:02:00Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-root"}}"#;
+
+        let ParsedRecord::Lifecycle(aborted) = parse_line(event).unwrap().unwrap() else {
+            panic!("expected an abort lifecycle event")
+        };
+
+        assert_eq!(aborted.kind, LifecycleEventKind::Abort);
+        assert_eq!(aborted.turn_id.as_deref(), Some("turn-root"));
+        assert_eq!(aborted.occurred_at_ms, 1_784_185_320_000);
     }
 
     #[test]
