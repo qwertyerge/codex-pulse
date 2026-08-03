@@ -84,7 +84,7 @@ describe("automatic updater configuration", () => {
     );
   });
 
-  it("keeps the 0.4.2 release version aligned", () => {
+  it("keeps the 0.4.3 release version aligned", () => {
     const packageJson = JSON.parse(read("package.json")) as { version: string };
     const tauri = JSON.parse(read("src-tauri/tauri.conf.json")) as {
       version: string;
@@ -96,10 +96,10 @@ describe("automatic updater configuration", () => {
       cargoLock: codexPulseVersionFromCargoLock(read("src-tauri/Cargo.lock")),
       tauri: tauri.version
     }).toEqual({
-      packageJson: "0.4.2",
-      cargoToml: "0.4.2",
-      cargoLock: "0.4.2",
-      tauri: "0.4.2"
+      packageJson: "0.4.3",
+      cargoToml: "0.4.3",
+      cargoLock: "0.4.3",
+      tauri: "0.4.3"
     });
   });
 
